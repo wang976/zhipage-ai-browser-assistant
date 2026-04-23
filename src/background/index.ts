@@ -51,6 +51,16 @@ function ensureConversation(conversations: Conversation[], conversationId?: stri
   return conversations.find((conversation) => conversation.id === conversationId) ?? conversations[0] ?? createConversation();
 }
 
+function findPreviousUserMessageIndex(messages: ConversationMessage[], assistantIndex: number) {
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function toModelMessages(messages: ConversationMessage[]) {
   return messages
     .filter((message) => message.role !== "assistant" || message.status !== "pending")
@@ -62,9 +72,18 @@ function toModelMessages(messages: ConversationMessage[]) {
         };
       }
 
+      const selectionQuote = message.meta?.selectionQuote?.trim();
+      const userContent = selectionQuote
+        ? [
+            "请基于下面的划词引用回答用户问题。",
+            `引用内容：\n${selectionQuote}`,
+            `用户问题：\n${message.content}`,
+          ].join("\n\n")
+        : message.content;
+
       return {
         role: message.role,
-        content: `${message.content}${buildAttachmentContext(message.attachments)}`,
+        content: `${userContent}${buildAttachmentContext(message.attachments)}`,
       };
     });
 }
@@ -76,6 +95,7 @@ async function processConversationMessage(payload: ChatRequestPayload) {
     content: payload.content,
     createdAt: Date.now(),
     attachments: payload.attachments,
+    meta: payload.quotedText ? { selectionQuote: payload.quotedText } : undefined,
   };
 
   const assistantMessageId = createId("message");
@@ -122,6 +142,91 @@ async function processConversationMessage(payload: ChatRequestPayload) {
 
   try {
     const content = await streamModelReply(currentModel, toModelMessages(activeConversation.messages), {
+      onChunk: (_chunk, fullText) => {
+        streamedContent = fullText;
+        streamUpdater.update(fullText);
+      },
+    });
+    streamedContent = content;
+    await streamUpdater.done(content);
+  } catch (error) {
+    await streamUpdater.fail(error instanceof Error ? error.message : "模型调用失败，请稍后重试。", streamedContent);
+  }
+}
+
+async function regenerateAssistantMessage(payload: { conversationId: string; assistantMessageId: string }) {
+  const stateAfterQueue = await updateAppState((state) => {
+    const conversation = state.conversations.find((item) => item.id === payload.conversationId);
+    if (!conversation) {
+      throw new Error("当前会话不存在。");
+    }
+
+    const assistantIndex = conversation.messages.findIndex(
+      (message) => message.id === payload.assistantMessageId && message.role === "assistant",
+    );
+    if (assistantIndex === -1) {
+      throw new Error("未找到需要重新生成的回答。");
+    }
+
+    const targetMessage = conversation.messages[assistantIndex];
+    if (targetMessage.status === "pending") {
+      throw new Error("这条回答仍在生成中。");
+    }
+
+    const previousUserIndex = findPreviousUserMessageIndex(conversation.messages, assistantIndex);
+    if (previousUserIndex === -1) {
+      throw new Error("找不到对应的用户提问，无法重新生成。");
+    }
+
+    const nextConversation: Conversation = {
+      ...conversation,
+      updatedAt: Date.now(),
+      messages: conversation.messages.map((message, index) =>
+        index === assistantIndex
+          ? {
+              ...message,
+              content: "",
+              error: undefined,
+              status: "pending",
+            }
+          : message,
+      ),
+    };
+
+    return {
+      ...state,
+      activeConversationId: nextConversation.id,
+      conversations: upsertConversation(state.conversations, nextConversation),
+    };
+  });
+
+  const conversation = stateAfterQueue.conversations.find((item) => item.id === payload.conversationId);
+  if (!conversation) {
+    throw new Error("当前会话不存在。");
+  }
+
+  const assistantIndex = conversation.messages.findIndex((message) => message.id === payload.assistantMessageId && message.role === "assistant");
+  if (assistantIndex === -1) {
+    throw new Error("未找到需要重新生成的回答。");
+  }
+
+  const contextMessages = conversation.messages.slice(0, assistantIndex);
+  const currentModel = await getCurrentModelConfig(stateAfterQueue);
+
+  if (!currentModel) {
+    await persistAssistantMessage(conversation.id, payload.assistantMessageId, {
+      content: "请先在设置页配置并启用一个模型，然后再开始对话。",
+      status: "error",
+      error: "未配置模型",
+    });
+    return;
+  }
+
+  const streamUpdater = createConversationStreamUpdater(conversation.id, payload.assistantMessageId);
+  let streamedContent = "";
+
+  try {
+    const content = await streamModelReply(currentModel, toModelMessages(contextMessages), {
       onChunk: (_chunk, fullText) => {
         streamedContent = fullText;
         streamUpdater.update(fullText);
@@ -356,11 +461,8 @@ async function handleSelectionChat(payload: SelectionChatPayload, sender: chrome
   await openSidePanelForCurrentWindow(sender.tab?.windowId);
   await processConversationMessage({
     titleHint: payload.titleHint || payload.prompt,
-    content: [
-      "请基于下面的选中文本回答我的问题。",
-      `选中文本：\n${payload.selectedText}`,
-      `我的要求：\n${payload.prompt}`,
-    ].join("\n\n"),
+    content: payload.prompt,
+    quotedText: payload.selectedText,
   });
 }
 
@@ -397,6 +499,10 @@ async function handleMessage(message: RuntimeRequest, sender: chrome.runtime.Mes
 
     case "SEND_CHAT_MESSAGE":
       void processConversationMessage(message.payload);
+      return { ok: true };
+
+    case "REGENERATE_ASSISTANT_MESSAGE":
+      void regenerateAssistantMessage(message.payload);
       return { ok: true };
 
     case "PAGE_SUMMARY":

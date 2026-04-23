@@ -80,6 +80,7 @@ export interface ChatRequestPayload {
   content: string;
   attachments?: Attachment[];
   titleHint?: string;
+  quotedText?: string;
 }
 
 export interface QuickTaskPayload {

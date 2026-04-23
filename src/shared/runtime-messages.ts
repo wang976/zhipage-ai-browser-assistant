@@ -12,6 +12,7 @@ export type RuntimeRequest =
   | { type: "CREATE_CONVERSATION" }
   | { type: "SET_ACTIVE_CONVERSATION"; payload: { conversationId: string } }
   | { type: "SEND_CHAT_MESSAGE"; payload: ChatRequestPayload }
+  | { type: "REGENERATE_ASSISTANT_MESSAGE"; payload: { conversationId: string; assistantMessageId: string } }
   | { type: "PAGE_SUMMARY"; payload: SummaryRequestPayload }
   | { type: "SELECTION_CHAT"; payload: SelectionChatPayload }
   | { type: "QUICK_ACTION"; payload: QuickTaskPayload }

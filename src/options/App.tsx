@@ -7,7 +7,7 @@ import {
 } from "../shared/constants";
 import { updateAppState } from "../shared/storage";
 import { useAppState } from "../shared/use-app-state";
-import type { AppState, ModelConfig, ProviderName } from "../shared/types";
+import type { AppState, ModelConfig, ProviderName, ToolbarAppearance } from "../shared/types";
 
 type SectionKey = "general" | "models" | "avatar" | "selection" | "shortcut";
 
@@ -67,6 +67,126 @@ function SectionCard({
       </div>
       {children}
     </section>
+  );
+}
+
+function SettingsSwitch({
+  checked,
+  label,
+  onToggle,
+}: {
+  checked: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      aria-checked={checked}
+      aria-label={label}
+      className={`op-toggle-switch ${checked ? "is-active" : ""}`}
+      onClick={onToggle}
+      role="switch"
+      type="button"
+    >
+      <span className="op-toggle-switch__thumb" />
+    </button>
+  );
+}
+
+function SwitchCard({
+  title,
+  description,
+  checked,
+  onToggle,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="op-switch-card">
+      <div className="op-switch-copy">
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+      <SettingsSwitch checked={checked} label={title} onToggle={onToggle} />
+    </div>
+  );
+}
+
+type ToolbarPreviewIconKind = "search" | "explain" | "translate" | "chat";
+
+const toolbarPreviewActions: Array<{ kind: ToolbarPreviewIconKind; label: string }> = [
+  { kind: "search", label: "AI搜索" },
+  { kind: "explain", label: "解释" },
+  { kind: "translate", label: "翻译" },
+];
+
+function ToolbarPreviewIcon({ kind }: { kind: ToolbarPreviewIconKind }) {
+  if (kind === "search") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="M11 4a7 7 0 1 0 7 7M20 20l-4-4M18 5l.6 1.4L20 7l-1.4.6L18 9l-.6-1.4L16 7l1.4-.6z" />
+      </svg>
+    );
+  }
+
+  if (kind === "explain") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="M7 4.5h9a2 2 0 0 1 2 2v11.5H8.5a2.5 2.5 0 1 0 0 5H19" />
+        <path d="M6.5 18H6a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h1.5" />
+      </svg>
+    );
+  }
+
+  if (kind === "translate") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="M4 6h9M8.5 6c0 5.2-2.4 9.3-5.5 12M8.5 6c1 3.3 3 6.3 6 8.7M14 5h6M17 5v12" />
+        <path d="M13 19l4-9 4 9M14.3 16h5.4" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M7 15.5h10M7 11.5h7M20 11c0 4.4-4 8-9 8-1.1 0-2.1-.2-3.1-.5L4 20l1.2-3.1C4.4 15.4 4 14.2 4 13c0-4.4 4-8 9-8s7 2.7 7 6z" />
+    </svg>
+  );
+}
+
+function ToolbarAppearancePreview({ appearance }: { appearance: ToolbarAppearance }) {
+  const isMinimal = appearance === "minimal";
+
+  return (
+    <div className={`op-appearance-preview ${isMinimal ? "is-minimal" : ""}`}>
+      <div aria-hidden="true" className="op-appearance-toolbar">
+        <div className="op-appearance-grip">
+          <span />
+          <span />
+        </div>
+        <div className="op-appearance-avatar">
+          <img alt="" src={getIconUrl()} />
+        </div>
+        {toolbarPreviewActions.map((action) => (
+          <div key={action.kind} className={`op-appearance-action ${isMinimal ? "is-minimal" : ""}`}>
+            <span className="op-appearance-icon">
+              <ToolbarPreviewIcon kind={action.kind} />
+            </span>
+            {isMinimal ? null : <span className="op-appearance-label">{action.label}</span>}
+          </div>
+        ))}
+        <div className="op-appearance-separator" />
+        <div className={`op-appearance-action is-active ${isMinimal ? "is-minimal" : ""}`}>
+          <span className="op-appearance-icon">
+            <ToolbarPreviewIcon kind="chat" />
+          </span>
+          {isMinimal ? null : <span className="op-appearance-label">问问智页</span>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -380,28 +500,23 @@ export function OptionsApp() {
     if (activeSection === "avatar") {
       return (
         <SectionCard description="控制网页右侧悬浮头像是否长期出现，以及禁用站点列表。" title="头像侧边栏">
-          <label className="op-switch-card">
-            <div>
-              <h3>始终悬浮在网页侧边</h3>
-              <p>关闭后，网页中不会显示悬浮头像入口，Ctrl+K 仍可通过命令打开侧边栏。</p>
-            </div>
-            <input
-              checked={state.settings.avatarSidebar.enabled}
-              onChange={(event) =>
-                void patchState((currentState) => ({
-                  ...currentState,
-                  settings: {
-                    ...currentState.settings,
-                    avatarSidebar: {
-                      ...currentState.settings.avatarSidebar,
-                      enabled: event.target.checked,
-                    },
+          <SwitchCard
+            checked={state.settings.avatarSidebar.enabled}
+            description="关闭后，网页中不会显示悬浮头像入口，Ctrl+K 仍可通过命令打开侧边栏。"
+            onToggle={() =>
+              void patchState((currentState) => ({
+                ...currentState,
+                settings: {
+                  ...currentState.settings,
+                  avatarSidebar: {
+                    ...currentState.settings.avatarSidebar,
+                    enabled: !currentState.settings.avatarSidebar.enabled,
                   },
-                }))
-              }
-              type="checkbox"
-            />
-          </label>
+                },
+              }))
+            }
+            title="始终悬浮在网页侧边"
+          />
           <div className="op-disabled-sites">
             <div className="op-inline-input">
               <input
@@ -434,39 +549,33 @@ export function OptionsApp() {
     if (activeSection === "selection") {
       return (
         <SectionCard description="控制选中网页文本时的工具栏出现逻辑与两种外观。" title="划词工具栏">
-          <label className="op-switch-card">
-            <div>
-              <h3>选中网页文字时出现</h3>
-              <p>解释、翻译和 chat 都依赖这里的开关。</p>
-            </div>
-            <input
-              checked={state.settings.selectionToolbar.enabled}
-              onChange={(event) =>
-                void patchState((currentState) => ({
-                  ...currentState,
-                  settings: {
-                    ...currentState.settings,
-                    selectionToolbar: {
-                      ...currentState.settings.selectionToolbar,
-                      enabled: event.target.checked,
-                    },
+          <SwitchCard
+            checked={state.settings.selectionToolbar.enabled}
+            description="解释、翻译和 chat 都依赖这里的开关。"
+            onToggle={() =>
+              void patchState((currentState) => ({
+                ...currentState,
+                settings: {
+                  ...currentState.settings,
+                  selectionToolbar: {
+                    ...currentState.settings.selectionToolbar,
+                    enabled: !currentState.settings.selectionToolbar.enabled,
                   },
-                }))
-              }
-              type="checkbox"
-            />
-          </label>
+                },
+              }))
+            }
+            title="选中网页文字时出现"
+          />
+          <h3 className="op-subsection-title">外观</h3>
           <div className="op-appearance-grid">
             {[
               {
                 key: "rich",
                 title: "直观的",
-                preview: "头像 AI搜索 解释 翻译 问问智页",
               },
               {
                 key: "minimal",
                 title: "极简的",
-                preview: "头像 · 解释 · 翻译 · Chat",
               },
             ].map((appearance) => (
               <button
@@ -488,7 +597,9 @@ export function OptionsApp() {
                 }
                 type="button"
               >
-                <div className="op-appearance-preview">{appearance.preview}</div>
+                <ToolbarAppearancePreview
+                  appearance={appearance.key as AppState["settings"]["selectionToolbar"]["appearance"]}
+                />
                 <strong>{appearance.title}</strong>
               </button>
             ))}

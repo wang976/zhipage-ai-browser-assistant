@@ -1,6 +1,8 @@
 import type { ProviderName } from "./types";
 
 export const STORAGE_KEY = "zhipage-assistant-state";
+export const STORAGE_META_KEY = `${STORAGE_KEY}:meta`;
+export const STORAGE_CONVERSATION_PREFIX = `${STORAGE_KEY}:conversation:`;
 export const NEW_CONVERSATION_TITLE = "新会话";
 export const DEFAULT_TRANSLATE_TARGET = "中文（简体）";
 

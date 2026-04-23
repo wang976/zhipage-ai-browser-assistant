@@ -13,6 +13,7 @@ export const contentStyles = `
   }
 
   .zp-avatar-wrap,
+  .zp-selection-highlight,
   .zp-toolbar,
   .zp-chat-toolbar,
   .zp-card,
@@ -25,6 +26,18 @@ export const contentStyles = `
     right: 18px;
     width: 44px;
     height: 44px;
+  }
+
+  .zp-selection-highlight {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .zp-selection-highlight-rect {
+    position: fixed;
+    border-radius: 2px;
+    background: rgba(47, 106, 247, 0.26);
   }
 
   .zp-avatar-button {
@@ -525,8 +538,197 @@ export const contentStyles = `
 
   .zp-card-body {
     min-height: 58px;
-    white-space: pre-wrap;
-    line-height: 1.78;
+    font-size: 14px;
+    line-height: 1.72;
+  }
+
+  .zp-card-body.is-error {
+    color: #cf4f4f;
+  }
+
+  .zp-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .zp-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .zp-markdown h1,
+  .zp-markdown h2,
+  .zp-markdown h3,
+  .zp-markdown h4,
+  .zp-markdown h5,
+  .zp-markdown h6,
+  .zp-markdown p,
+  .zp-markdown ul,
+  .zp-markdown ol,
+  .zp-markdown blockquote,
+  .zp-markdown pre,
+  .zp-markdown table {
+    margin: 0 0 12px;
+  }
+
+  .zp-markdown h1 {
+    font-size: 1.2em;
+  }
+
+  .zp-markdown h2 {
+    font-size: 1.12em;
+  }
+
+  .zp-markdown h3 {
+    font-size: 1.05em;
+  }
+
+  .zp-markdown h4,
+  .zp-markdown h5,
+  .zp-markdown h6 {
+    font-size: 1em;
+  }
+
+  .zp-markdown ul,
+  .zp-markdown ol {
+    padding-left: 1.35em;
+  }
+
+  .zp-markdown li + li {
+    margin-top: 6px;
+  }
+
+  .zp-markdown blockquote {
+    padding: 10px 12px;
+    border-left: 4px solid rgba(47, 106, 247, 0.28);
+    border-radius: 0 14px 14px 0;
+    color: #516079;
+    background: rgba(47, 106, 247, 0.06);
+  }
+
+  .zp-markdown pre {
+    overflow: auto;
+    padding: 13px 14px;
+    border-radius: 16px;
+    line-height: 1.58;
+    color: #1f2937;
+    background: #ffffff;
+    border: 1px solid rgba(114, 128, 154, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  .zp-markdown code {
+    font-family:
+      "SFMono-Regular",
+      "JetBrains Mono",
+      "Fira Code",
+      "Cascadia Code",
+      Consolas,
+      monospace;
+    font-size: 0.86em;
+  }
+
+  .zp-markdown :not(pre) > code {
+    padding: 0.15em 0.4em;
+    border-radius: 8px;
+    color: #c43d62;
+    background: rgba(196, 61, 98, 0.1);
+  }
+
+  .zp-markdown pre code {
+    display: block;
+    white-space: pre;
+    background: transparent;
+  }
+
+  .zp-markdown table {
+    width: 100%;
+    border-collapse: collapse;
+    overflow: hidden;
+    border-radius: 14px;
+    font-size: 0.9em;
+  }
+
+  .zp-markdown th,
+  .zp-markdown td {
+    padding: 9px 11px;
+    border: 1px solid rgba(114, 128, 154, 0.22);
+    text-align: left;
+  }
+
+  .zp-markdown th {
+    background: rgba(47, 106, 247, 0.08);
+  }
+
+  .zp-markdown a {
+    color: #2f6af7;
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+  }
+
+  .zp-markdown .hljs {
+    display: block;
+    overflow-x: auto;
+    color: #1f2937;
+    background: transparent;
+  }
+
+  .zp-markdown .hljs-comment,
+  .zp-markdown .hljs-quote {
+    color: #8b95a7;
+    font-style: italic;
+  }
+
+  .zp-markdown .hljs-keyword,
+  .zp-markdown .hljs-selector-tag,
+  .zp-markdown .hljs-literal,
+  .zp-markdown .hljs-section,
+  .zp-markdown .hljs-link {
+    color: #7c3aed;
+    font-weight: 600;
+  }
+
+  .zp-markdown .hljs-string,
+  .zp-markdown .hljs-title,
+  .zp-markdown .hljs-name,
+  .zp-markdown .hljs-attribute,
+  .zp-markdown .hljs-symbol,
+  .zp-markdown .hljs-bullet,
+  .zp-markdown .hljs-addition {
+    color: #0f766e;
+  }
+
+  .zp-markdown .hljs-number,
+  .zp-markdown .hljs-built_in,
+  .zp-markdown .hljs-type,
+  .zp-markdown .hljs-template-tag,
+  .zp-markdown .hljs-template-variable {
+    color: #c2410c;
+  }
+
+  .zp-markdown .hljs-variable,
+  .zp-markdown .hljs-regexp,
+  .zp-markdown .hljs-meta,
+  .zp-markdown .hljs-selector-id,
+  .zp-markdown .hljs-selector-class {
+    color: #2563eb;
+  }
+
+  .zp-markdown .hljs-attr,
+  .zp-markdown .hljs-property,
+  .zp-markdown .hljs-params,
+  .zp-markdown .hljs-function {
+    color: #b45309;
+  }
+
+  .zp-markdown .hljs-deletion {
+    color: #b42318;
+  }
+
+  .zp-markdown .hljs-emphasis {
+    font-style: italic;
+  }
+
+  .zp-markdown .hljs-strong {
+    font-weight: 700;
   }
 
   .zp-card-footer {

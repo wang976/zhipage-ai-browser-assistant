@@ -1,5 +1,7 @@
 // src/shared/constants.ts
 var STORAGE_KEY = "zhipage-assistant-state";
+var STORAGE_META_KEY = `${STORAGE_KEY}:meta`;
+var STORAGE_CONVERSATION_PREFIX = `${STORAGE_KEY}:conversation:`;
 var NEW_CONVERSATION_TITLE = "\u65B0\u4F1A\u8BDD";
 var DEFAULT_TRANSLATE_TARGET = "\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09";
 var PROVIDER_LABELS = {
@@ -280,8 +282,25 @@ async function requestModelReply(config, messages) {
 }
 
 // src/shared/storage.ts
+var initializationPromise = null;
+function createDefaultState() {
+  return structuredClone(defaultAppState);
+}
+function getConversationStorageKey(conversationId) {
+  return `${STORAGE_CONVERSATION_PREFIX}${conversationId}`;
+}
+function normalizeConversation(conversation) {
+  const base = createConversation();
+  return {
+    ...base,
+    ...conversation,
+    id: conversation?.id || base.id,
+    title: conversation?.title?.trim() || base.title,
+    messages: Array.isArray(conversation?.messages) ? conversation.messages : []
+  };
+}
 function normalizeState(state) {
-  const base = structuredClone(defaultAppState);
+  const base = createDefaultState();
   const next = {
     ...base,
     ...state,
@@ -305,7 +324,7 @@ function normalizeState(state) {
         ...state?.settings?.shortcuts
       }
     },
-    conversations: state?.conversations?.length ? sortConversations(state.conversations) : [createConversation()],
+    conversations: state?.conversations?.length ? sortConversations(state.conversations.map((conversation) => normalizeConversation(conversation))) : [createConversation()],
     models: state?.models?.length ? state.models : base.models,
     currentModelId: state?.currentModelId ?? base.currentModelId
   };
@@ -317,13 +336,110 @@ function normalizeState(state) {
   }
   return next;
 }
+function normalizeMeta(meta) {
+  const base = createDefaultState();
+  const next = {
+    activeConversationId: meta?.activeConversationId ?? base.activeConversationId,
+    conversationIds: meta?.conversationIds?.length ? Array.from(new Set(meta.conversationIds)) : base.conversations.map((conversation) => conversation.id),
+    models: meta?.models?.length ? meta.models : base.models,
+    currentModelId: meta?.currentModelId ?? base.currentModelId,
+    settings: {
+      ...base.settings,
+      ...meta?.settings,
+      general: {
+        ...base.settings.general,
+        ...meta?.settings?.general
+      },
+      avatarSidebar: {
+        ...base.settings.avatarSidebar,
+        ...meta?.settings?.avatarSidebar
+      },
+      selectionToolbar: {
+        ...base.settings.selectionToolbar,
+        ...meta?.settings?.selectionToolbar
+      },
+      shortcuts: {
+        ...base.settings.shortcuts,
+        ...meta?.settings?.shortcuts
+      }
+    }
+  };
+  if (next.currentModelId && !next.models.some((model) => model.id === next.currentModelId && model.enabled)) {
+    next.currentModelId = next.models.find((model) => model.enabled)?.id ?? null;
+  }
+  return next;
+}
+async function ensureStorageInitialized() {
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      const result = await chrome.storage.local.get([STORAGE_META_KEY, STORAGE_KEY]);
+      const meta = result[STORAGE_META_KEY];
+      if (meta) {
+        return;
+      }
+      const legacyState = result[STORAGE_KEY];
+      if (legacyState) {
+        await saveAppState(normalizeState(legacyState));
+        await chrome.storage.local.remove(STORAGE_KEY);
+        return;
+      }
+      await saveAppState(createDefaultState());
+    })().finally(() => {
+      initializationPromise = null;
+    });
+  }
+  await initializationPromise;
+}
 async function loadAppState() {
-  const result = await chrome.storage.local.get(STORAGE_KEY);
-  return normalizeState(result[STORAGE_KEY]);
+  await ensureStorageInitialized();
+  const metaResult = await chrome.storage.local.get(STORAGE_META_KEY);
+  const meta = normalizeMeta(metaResult[STORAGE_META_KEY]);
+  const conversationKeys = meta.conversationIds.map((conversationId) => getConversationStorageKey(conversationId));
+  const conversationResult = conversationKeys.length ? await chrome.storage.local.get(conversationKeys) : {};
+  const conversations = sortConversations(
+    meta.conversationIds.map((conversationId) => {
+      const storedConversation = conversationResult[getConversationStorageKey(conversationId)];
+      return storedConversation ? normalizeConversation(storedConversation) : null;
+    }).filter((conversation) => Boolean(conversation))
+  );
+  if (!conversations.length) {
+    const fallbackState = createDefaultState();
+    await saveAppState(fallbackState);
+    return fallbackState;
+  }
+  const nextState = normalizeState({
+    ...meta,
+    conversations
+  });
+  const nextConversationIds = nextState.conversations.map((conversation) => conversation.id);
+  const needsRepair = nextConversationIds.length !== meta.conversationIds.length || nextConversationIds.some((conversationId, index) => conversationId !== meta.conversationIds[index]) || nextState.activeConversationId !== meta.activeConversationId;
+  if (needsRepair) {
+    await saveAppState(nextState);
+  }
+  return nextState;
 }
 async function saveAppState(state) {
   const normalized = normalizeState(state);
-  await chrome.storage.local.set({ [STORAGE_KEY]: normalized });
+  const previousMetaResult = await chrome.storage.local.get(STORAGE_META_KEY);
+  const previousMeta = normalizeMeta(previousMetaResult[STORAGE_META_KEY]);
+  const nextMeta = {
+    activeConversationId: normalized.activeConversationId,
+    conversationIds: normalized.conversations.map((conversation) => conversation.id),
+    models: normalized.models,
+    currentModelId: normalized.currentModelId,
+    settings: normalized.settings
+  };
+  const entries = {
+    [STORAGE_META_KEY]: nextMeta
+  };
+  for (const conversation of normalized.conversations) {
+    entries[getConversationStorageKey(conversation.id)] = conversation;
+  }
+  await chrome.storage.local.set(entries);
+  const staleConversationKeys = previousMeta.conversationIds.filter((conversationId) => !nextMeta.conversationIds.includes(conversationId)).map((conversationId) => getConversationStorageKey(conversationId));
+  if (staleConversationKeys.length) {
+    await chrome.storage.local.remove(staleConversationKeys);
+  }
   return normalized;
 }
 async function updateAppState(updater) {
@@ -365,6 +481,14 @@ function upsertConversation(conversations, nextConversation) {
 function ensureConversation(conversations, conversationId) {
   return conversations.find((conversation) => conversation.id === conversationId) ?? conversations[0] ?? createConversation();
 }
+function findPreviousUserMessageIndex(messages, assistantIndex) {
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      return index;
+    }
+  }
+  return -1;
+}
 function toModelMessages(messages) {
   return messages.filter((message) => message.role !== "assistant" || message.status !== "pending").map((message) => {
     if (message.role !== "user") {
@@ -373,9 +497,17 @@ function toModelMessages(messages) {
         content: message.content
       };
     }
+    const selectionQuote = message.meta?.selectionQuote?.trim();
+    const userContent = selectionQuote ? [
+      "\u8BF7\u57FA\u4E8E\u4E0B\u9762\u7684\u5212\u8BCD\u5F15\u7528\u56DE\u7B54\u7528\u6237\u95EE\u9898\u3002",
+      `\u5F15\u7528\u5185\u5BB9\uFF1A
+${selectionQuote}`,
+      `\u7528\u6237\u95EE\u9898\uFF1A
+${message.content}`
+    ].join("\n\n") : message.content;
     return {
       role: message.role,
-      content: `${message.content}${buildAttachmentContext(message.attachments)}`
+      content: `${userContent}${buildAttachmentContext(message.attachments)}`
     };
   });
 }
@@ -385,7 +517,8 @@ async function processConversationMessage(payload) {
     role: "user",
     content: payload.content,
     createdAt: Date.now(),
-    attachments: payload.attachments
+    attachments: payload.attachments,
+    meta: payload.quotedText ? { selectionQuote: payload.quotedText } : void 0
   };
   const assistantMessageId = createId("message");
   const pendingAssistantMessage = {
@@ -424,6 +557,77 @@ async function processConversationMessage(payload) {
   let streamedContent = "";
   try {
     const content = await streamModelReply(currentModel, toModelMessages(activeConversation.messages), {
+      onChunk: (_chunk, fullText) => {
+        streamedContent = fullText;
+        streamUpdater.update(fullText);
+      }
+    });
+    streamedContent = content;
+    await streamUpdater.done(content);
+  } catch (error) {
+    await streamUpdater.fail(error instanceof Error ? error.message : "\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002", streamedContent);
+  }
+}
+async function regenerateAssistantMessage(payload) {
+  const stateAfterQueue = await updateAppState((state) => {
+    const conversation2 = state.conversations.find((item) => item.id === payload.conversationId);
+    if (!conversation2) {
+      throw new Error("\u5F53\u524D\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
+    }
+    const assistantIndex2 = conversation2.messages.findIndex(
+      (message) => message.id === payload.assistantMessageId && message.role === "assistant"
+    );
+    if (assistantIndex2 === -1) {
+      throw new Error("\u672A\u627E\u5230\u9700\u8981\u91CD\u65B0\u751F\u6210\u7684\u56DE\u7B54\u3002");
+    }
+    const targetMessage = conversation2.messages[assistantIndex2];
+    if (targetMessage.status === "pending") {
+      throw new Error("\u8FD9\u6761\u56DE\u7B54\u4ECD\u5728\u751F\u6210\u4E2D\u3002");
+    }
+    const previousUserIndex = findPreviousUserMessageIndex(conversation2.messages, assistantIndex2);
+    if (previousUserIndex === -1) {
+      throw new Error("\u627E\u4E0D\u5230\u5BF9\u5E94\u7684\u7528\u6237\u63D0\u95EE\uFF0C\u65E0\u6CD5\u91CD\u65B0\u751F\u6210\u3002");
+    }
+    const nextConversation = {
+      ...conversation2,
+      updatedAt: Date.now(),
+      messages: conversation2.messages.map(
+        (message, index) => index === assistantIndex2 ? {
+          ...message,
+          content: "",
+          error: void 0,
+          status: "pending"
+        } : message
+      )
+    };
+    return {
+      ...state,
+      activeConversationId: nextConversation.id,
+      conversations: upsertConversation(state.conversations, nextConversation)
+    };
+  });
+  const conversation = stateAfterQueue.conversations.find((item) => item.id === payload.conversationId);
+  if (!conversation) {
+    throw new Error("\u5F53\u524D\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
+  }
+  const assistantIndex = conversation.messages.findIndex((message) => message.id === payload.assistantMessageId && message.role === "assistant");
+  if (assistantIndex === -1) {
+    throw new Error("\u672A\u627E\u5230\u9700\u8981\u91CD\u65B0\u751F\u6210\u7684\u56DE\u7B54\u3002");
+  }
+  const contextMessages = conversation.messages.slice(0, assistantIndex);
+  const currentModel = await getCurrentModelConfig(stateAfterQueue);
+  if (!currentModel) {
+    await persistAssistantMessage(conversation.id, payload.assistantMessageId, {
+      content: "\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u914D\u7F6E\u5E76\u542F\u7528\u4E00\u4E2A\u6A21\u578B\uFF0C\u7136\u540E\u518D\u5F00\u59CB\u5BF9\u8BDD\u3002",
+      status: "error",
+      error: "\u672A\u914D\u7F6E\u6A21\u578B"
+    });
+    return;
+  }
+  const streamUpdater = createConversationStreamUpdater(conversation.id, payload.assistantMessageId);
+  let streamedContent = "";
+  try {
+    const content = await streamModelReply(currentModel, toModelMessages(contextMessages), {
       onChunk: (_chunk, fullText) => {
         streamedContent = fullText;
         streamUpdater.update(fullText);
@@ -630,13 +834,8 @@ async function handleSelectionChat(payload, sender) {
   await openSidePanelForCurrentWindow(sender.tab?.windowId);
   await processConversationMessage({
     titleHint: payload.titleHint || payload.prompt,
-    content: [
-      "\u8BF7\u57FA\u4E8E\u4E0B\u9762\u7684\u9009\u4E2D\u6587\u672C\u56DE\u7B54\u6211\u7684\u95EE\u9898\u3002",
-      `\u9009\u4E2D\u6587\u672C\uFF1A
-${payload.selectedText}`,
-      `\u6211\u7684\u8981\u6C42\uFF1A
-${payload.prompt}`
-    ].join("\n\n")
+    content: payload.prompt,
+    quotedText: payload.selectedText
   });
 }
 async function handleCreateConversation() {
@@ -667,6 +866,9 @@ async function handleMessage(message, sender) {
       return { ok: true };
     case "SEND_CHAT_MESSAGE":
       void processConversationMessage(message.payload);
+      return { ok: true };
+    case "REGENERATE_ASSISTANT_MESSAGE":
+      void regenerateAssistantMessage(message.payload);
       return { ok: true };
     case "PAGE_SUMMARY":
       void handleSummaryRequest(message.payload, sender);

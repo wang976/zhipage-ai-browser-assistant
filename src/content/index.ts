@@ -1,4 +1,5 @@
 import { TARGET_LANGUAGES } from "../shared/constants";
+import { renderMarkdownToHtml, renderPlainTextToHtml } from "../shared/markdown";
 import { loadAppState, subscribeToAppState } from "../shared/storage";
 import type { RuntimePushMessage } from "../shared/runtime-messages";
 import type { AppState, ToolbarAppearance } from "../shared/types";
@@ -11,6 +12,8 @@ type CardKind = "explain" | "translate";
 interface SelectionSnapshot {
   text: string;
   rect: DOMRect;
+  rects: DOMRect[];
+  range: Range;
 }
 
 interface FloatingCard {
@@ -35,10 +38,6 @@ function escapeHtml(text: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-function multiline(text: string) {
-  return escapeHtml(text).replaceAll("\n", "<br />");
 }
 
 function isEditableNode(node: Node | null) {
@@ -205,6 +204,7 @@ class ContentAssistant {
   private host: HTMLDivElement;
   private shadowRoot: ShadowRoot;
   private avatarZone: HTMLDivElement;
+  private highlightZone: HTMLDivElement;
   private toolbarZone: HTMLDivElement;
   private cardZone: HTMLDivElement;
   private toastZone: HTMLDivElement;
@@ -255,12 +255,14 @@ class ContentAssistant {
       <style>${contentStyles}</style>
       <div class="zp-root">
         <div data-zone="avatar"></div>
+        <div data-zone="highlight"></div>
         <div data-zone="toolbar"></div>
         <div data-zone="cards"></div>
         <div data-zone="toast"></div>
       </div>
     `;
     this.avatarZone = this.shadowRoot.querySelector("[data-zone='avatar']") as HTMLDivElement;
+    this.highlightZone = this.shadowRoot.querySelector("[data-zone='highlight']") as HTMLDivElement;
     this.toolbarZone = this.shadowRoot.querySelector("[data-zone='toolbar']") as HTMLDivElement;
     this.cardZone = this.shadowRoot.querySelector("[data-zone='cards']") as HTMLDivElement;
     this.toastZone = this.shadowRoot.querySelector("[data-zone='toast']") as HTMLDivElement;
@@ -284,6 +286,7 @@ class ContentAssistant {
     this.shadowRoot.addEventListener("click", (event) => {
       void this.handleShadowClick(event);
     });
+    this.shadowRoot.addEventListener("mousedown", (event) => this.handleShadowMouseDown(event as MouseEvent));
     this.shadowRoot.addEventListener("input", (event) => this.handleShadowInput(event));
     this.shadowRoot.addEventListener("change", (event) => {
       void this.handleShadowChange(event);
@@ -388,9 +391,68 @@ class ContentAssistant {
 
   private render() {
     this.renderAvatar();
+    this.renderSelectionHighlight();
     this.renderToolbar();
     this.renderCards();
     this.renderToast();
+  }
+
+  private cloneDomRect(rect: DOMRect | DOMRectReadOnly) {
+    return new DOMRect(rect.x, rect.y, rect.width, rect.height);
+  }
+
+  private nativeSelectionMatchesSnapshot() {
+    if (!this.selection) {
+      return false;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return false;
+    }
+
+    try {
+      const nativeRange = selection.getRangeAt(0);
+      return (
+        nativeRange.compareBoundaryPoints(Range.START_TO_START, this.selection.range) === 0 &&
+        nativeRange.compareBoundaryPoints(Range.END_TO_END, this.selection.range) === 0
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private renderSelectionHighlight() {
+    if (!this.selection || this.nativeSelectionMatchesSnapshot()) {
+      this.highlightZone.innerHTML = "";
+      return;
+    }
+
+    this.highlightZone.innerHTML = `
+      <div class="zp-selection-highlight">
+        ${this.selection.rects
+          .map(
+            (rect) =>
+              `<div class="zp-selection-highlight-rect" style="left:${rect.left}px; top:${rect.top}px; width:${rect.width}px; height:${rect.height}px;"></div>`,
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  private restoreNativeSelection() {
+    if (!this.selection) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    selection.removeAllRanges();
+    selection.addRange(this.selection.range.cloneRange());
+    this.renderSelectionHighlight();
   }
 
   private renderAvatar() {
@@ -523,6 +585,7 @@ class ContentAssistant {
           input.selectionStart = input.value.length;
           input.selectionEnd = input.value.length;
         }
+        this.renderSelectionHighlight();
       }, 0);
 
       return;
@@ -549,6 +612,7 @@ class ContentAssistant {
 
     this.cardZone.innerHTML = this.cards
       .map((card) => {
+        const renderedResult = card.result ? renderMarkdownToHtml(card.result) : "";
         const languageRow =
           card.kind === "translate"
             ? `
@@ -582,15 +646,13 @@ class ContentAssistant {
               <button class="zp-card-close" data-action="close-card" data-card-id="${card.id}" type="button">✕</button>
             </div>
             ${languageRow}
-            <div class="zp-card-source">${multiline(truncateText(card.sourceText, 180))}</div>
-            <div class="zp-card-body">${
+            <div class="zp-card-source">${renderPlainTextToHtml(truncateText(card.sourceText, 180))}</div>
+            <div class="zp-card-body${card.status === "error" ? " is-error" : ""}">${
               card.status === "loading"
                 ? card.result
-                  ? multiline(card.result)
+                  ? `<div class="zp-markdown">${renderedResult}</div>`
                   : "正在请求当前模型…"
-                : card.status === "error"
-                  ? `<span style="color:#cf4f4f">${multiline(card.result)}</span>`
-                  : multiline(card.result)
+                : `<div class="zp-markdown">${renderedResult}</div>`
             }</div>
             <div class="zp-card-footer">回答会优先结合当前网页内容与所选模型配置。</div>
           </section>
@@ -608,6 +670,7 @@ class ContentAssistant {
     this.toolbarMode = "actions";
     this.toolbarDraft = "";
     this.chatToolbarWidth = null;
+    this.renderSelectionHighlight();
     this.renderToolbar();
   }
 
@@ -640,9 +703,12 @@ class ContentAssistant {
     this.selection = {
       text: truncateText(text, 6000),
       rect,
+      rects: Array.from(range.getClientRects()).map((item) => this.cloneDomRect(item)),
+      range: range.cloneRange(),
     };
     this.toolbarMode = "actions";
     this.toolbarDraft = "";
+    this.renderSelectionHighlight();
     this.renderToolbar();
   }
 
@@ -737,6 +803,24 @@ class ContentAssistant {
     if (target?.dataset.role === "chat-input") {
       this.toolbarDraft = target.value;
     }
+  }
+
+  private handleShadowMouseDown(event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+
+    if (target.closest("input, textarea, select, option")) {
+      return;
+    }
+
+    if (!target.closest("button, [data-action], [data-drag-card], [data-drag-avatar]")) {
+      return;
+    }
+
+    event.preventDefault();
+    this.restoreNativeSelection();
   }
 
   private async handleShadowChange(event: Event) {

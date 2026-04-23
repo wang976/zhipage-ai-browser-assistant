@@ -1,6 +1,6 @@
 {
   "name": "zhipage-browser-ai-assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,9 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "dompurify": "^3.4.1",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
