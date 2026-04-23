@@ -1,5 +1,6 @@
 import { TARGET_LANGUAGES } from "../shared/constants";
 import { loadAppState, subscribeToAppState } from "../shared/storage";
+import type { RuntimePushMessage } from "../shared/runtime-messages";
 import type { AppState, ToolbarAppearance } from "../shared/types";
 import { truncateText } from "../shared/utils";
 import { contentStyles } from "./styles";
@@ -19,6 +20,12 @@ interface FloatingCard {
   targetLanguage: string;
   status: "loading" | "done" | "error";
   result: string;
+  activeRequestId: string | null;
+  position: {
+    x: number;
+    y: number;
+  };
+  zIndex: number;
 }
 
 function escapeHtml(text: string) {
@@ -75,6 +82,114 @@ function getIconUrl() {
   return chrome.runtime.getURL("assets/icon.svg");
 }
 
+function getAvatarActionIcon(kind: "ocr" | "summary" | "translate") {
+  if (kind === "ocr") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 4H5a1 1 0 0 0-1 1v2M17 4h2a1 1 0 0 1 1 1v2M7 20H5a1 1 0 0 1-1-1v-2M17 20h2a1 1 0 0 0 1-1v-2M8 8h8v8H8z" />
+      </svg>
+    `;
+  }
+
+  if (kind === "summary") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 4h6l4 4v11a1 1 0 0 1-1 1H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm5 1.5V9h3.5M9 12h6M9 15h6M9 18h4" />
+      </svg>
+    `;
+  }
+
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 7h8M9 7c0 6-2.5 10-5.5 12M9 7c0 3.5 2 7 5.5 9M15 5l4 4M18.5 10.5l-7 7M14 19l5 1-1-5" />
+    </svg>
+  `;
+}
+
+function getToolbarActionIcon(kind: "search" | "explain" | "read" | "translate" | "chat" | "collapse" | "send") {
+  switch (kind) {
+    case "search":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M11 4a7 7 0 1 0 7 7M20 20l-4-4M18 5l.6 1.4L20 7l-1.4.6L18 9l-.6-1.4L16 7l1.4-.6z" />
+        </svg>
+      `;
+
+    case "explain":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 4.5h9a2 2 0 0 1 2 2v11.5H8.5a2.5 2.5 0 1 0 0 5H19" />
+          <path d="M6.5 18H6a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h1.5" />
+        </svg>
+      `;
+
+    case "read":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 9v6M9 7v10M14 8c2 1.2 3.2 3.1 3.2 5s-1.2 3.8-3.2 5" />
+          <path d="M17.5 5.5c3.1 2 5 4.8 5 7.5s-1.9 5.5-5 7.5" />
+        </svg>
+      `;
+
+    case "translate":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 6h9M8.5 6c0 5.2-2.4 9.3-5.5 12M8.5 6c1 3.3 3 6.3 6 8.7M14 5h6M17 5v12" />
+          <path d="M13 19l4-9 4 9M14.3 16h5.4" />
+        </svg>
+      `;
+
+    case "chat":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 15.5h10M7 11.5h7M20 11c0 4.4-4 8-9 8-1.1 0-2.1-.2-3.1-.5L4 20l1.2-3.1C4.4 15.4 4 14.2 4 13c0-4.4 4-8 9-8s7 2.7 7 6z" />
+        </svg>
+      `;
+
+    case "collapse":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      `;
+
+    case "send":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M6 11l6-6 6 6" />
+        </svg>
+      `;
+  }
+}
+
+function createToolbarButtonContent(label: string, icon: string, appearance: ToolbarAppearance) {
+  return `
+    <span class="zp-toolbar-button-icon" aria-hidden="true">${icon}</span>
+    ${appearance === "rich" ? `<span class="zp-toolbar-button-text">${escapeHtml(label)}</span>` : ""}
+  `;
+}
+
+function createToolbarButton(action: string, label: string, icon: string, appearance: ToolbarAppearance, active = false) {
+  return `
+    <button
+      aria-label="${escapeHtml(label)}"
+      class="zp-toolbar-button${active ? " is-active" : ""}"
+      data-action="${action}"
+      type="button"
+    >
+      ${createToolbarButtonContent(label, icon, appearance)}
+    </button>
+  `;
+}
+
+function createToolbarIconButton(action: string, label: string, icon: string) {
+  return `
+    <button aria-label="${escapeHtml(label)}" class="zp-toolbar-control" data-action="${action}" type="button">
+      ${icon}
+    </button>
+  `;
+}
+
 function runtimeRequest<T>(payload: unknown) {
   return chrome.runtime.sendMessage(payload).then((response: { ok: boolean; data?: T; error?: string }) => {
     if (!response?.ok) {
@@ -96,10 +211,41 @@ class ContentAssistant {
   private selection: SelectionSnapshot | null = null;
   private toolbarMode: ToolbarMode = "actions";
   private toolbarDraft = "";
+  private chatToolbarWidth: number | null = null;
   private cards: FloatingCard[] = [];
+  private nextCardZIndex = 20;
+  private avatarDismissed = false;
+  private avatarTop = Math.round(window.innerHeight * 0.42);
+  private suppressAvatarClick = false;
   private toast = "";
   private toastTimer: number | null = null;
   private unsubscribe: (() => void) | null = null;
+  private runtimeMessageListener = (message: RuntimePushMessage) => {
+    if (message?.type !== "QUICK_ACTION_STREAM_EVENT") {
+      return;
+    }
+
+    const card = this.cards.find((item) => item.activeRequestId === message.payload.requestId);
+    if (!card) {
+      return;
+    }
+
+    if (message.payload.phase === "start") {
+      card.status = "loading";
+      card.result = "";
+    } else if (message.payload.phase === "delta") {
+      card.status = "loading";
+      card.result = message.payload.content;
+    } else if (message.payload.phase === "done") {
+      card.status = "done";
+      card.result = message.payload.content;
+    } else if (message.payload.phase === "error") {
+      card.status = "error";
+      card.result = message.payload.content || message.payload.error || "请求失败";
+    }
+
+    this.renderCards();
+  };
 
   constructor() {
     this.host = document.createElement("div");
@@ -120,6 +266,10 @@ class ContentAssistant {
     this.toastZone = this.shadowRoot.querySelector("[data-zone='toast']") as HTMLDivElement;
   }
 
+  private isEventInsideAssistant(event: Event) {
+    return event.composedPath().includes(this.host);
+  }
+
   async init() {
     document.documentElement.append(this.host);
     this.state = await loadAppState();
@@ -138,20 +288,30 @@ class ContentAssistant {
     this.shadowRoot.addEventListener("change", (event) => {
       void this.handleShadowChange(event);
     });
+    this.shadowRoot.addEventListener("pointerdown", (event) => {
+      this.handleShadowPointerDown(event as PointerEvent);
+    });
     this.shadowRoot.addEventListener("keydown", (event) => {
       void this.handleShadowKeydown(event as KeyboardEvent);
     });
+    chrome.runtime.onMessage.addListener(this.runtimeMessageListener);
 
-    document.addEventListener("mouseup", () => {
+    document.addEventListener("mouseup", (event) => {
+      if (this.isEventInsideAssistant(event)) {
+        return;
+      }
       window.setTimeout(() => this.captureSelection(), 0);
     });
-    document.addEventListener("keyup", () => {
+    document.addEventListener("keyup", (event) => {
+      if (this.isEventInsideAssistant(event)) {
+        return;
+      }
       window.setTimeout(() => this.captureSelection(), 0);
     });
     document.addEventListener(
       "mousedown",
       (event) => {
-        if (event.composedPath().includes(this.host)) {
+        if (this.isEventInsideAssistant(event)) {
           return;
         }
         this.hideToolbar();
@@ -177,12 +337,20 @@ class ContentAssistant {
       },
       true,
     );
+    window.addEventListener("resize", () => {
+      this.avatarTop = this.clampAvatarTop(this.avatarTop);
+      const avatarWrap = this.shadowRoot.querySelector<HTMLElement>(".zp-avatar-wrap");
+      if (avatarWrap) {
+        avatarWrap.style.top = `${this.avatarTop}px`;
+      }
+    });
 
     this.render();
   }
 
   destroy() {
     this.unsubscribe?.();
+    chrome.runtime.onMessage.removeListener(this.runtimeMessageListener);
     this.host.remove();
   }
 
@@ -226,33 +394,71 @@ class ContentAssistant {
   }
 
   private renderAvatar() {
-    if (!this.shouldShowAvatar()) {
+    if (!this.shouldShowAvatar() || this.avatarDismissed) {
       this.avatarZone.innerHTML = "";
       return;
     }
 
     const iconUrl = getIconUrl();
     this.avatarZone.innerHTML = `
-      <div class="zp-avatar-wrap">
+      <div class="zp-avatar-wrap" style="top:${this.avatarTop}px;">
         <div class="zp-avatar-tip">Ctrl + K</div>
-        <button class="zp-avatar-button" data-action="open-side-panel" type="button">
+        <button aria-label="隐藏悬浮头像" class="zp-avatar-dismiss" data-action="dismiss-avatar" type="button">×</button>
+        <button class="zp-avatar-button" data-action="open-side-panel" data-drag-avatar="true" type="button">
           <img alt="智页浏览器 AI 助手" src="${iconUrl}" />
         </button>
         <div class="zp-avatar-menu">
-          <button class="zp-avatar-action" data-action="avatar-ocr" type="button">截图识别文字</button>
-          <button class="zp-avatar-action" data-action="avatar-summary" type="button">总结此页面</button>
-          <button class="zp-avatar-action" data-action="avatar-translate" type="button">翻译此页面</button>
+          <button
+            aria-label="截图识别文字"
+            class="zp-avatar-action"
+            data-action="avatar-ocr"
+            data-tooltip="截图识别文字"
+            title="截图识别文字"
+            type="button"
+          >
+            ${getAvatarActionIcon("ocr")}
+          </button>
+          <div class="zp-avatar-divider"></div>
+          <button
+            aria-label="总结此页面"
+            class="zp-avatar-action"
+            data-action="avatar-summary"
+            data-tooltip="总结此页面"
+            title="总结此页面"
+            type="button"
+          >
+            ${getAvatarActionIcon("summary")}
+          </button>
+          <div class="zp-avatar-divider"></div>
+          <button
+            aria-label="翻译此页面"
+            class="zp-avatar-action"
+            data-action="avatar-translate"
+            data-tooltip="翻译此页面"
+            title="翻译此页面"
+            type="button"
+          >
+            ${getAvatarActionIcon("translate")}
+          </button>
         </div>
       </div>
     `;
   }
 
-  private getToolbarPosition() {
+  private getDefaultToolbarWidth() {
+    const preferredWidth = this.getToolbarAppearance() === "rich" ? 600 : 360;
+    return Math.min(preferredWidth, Math.max(window.innerWidth - 28, 260));
+  }
+
+  private getChatToolbarWidth() {
+    return Math.min(this.chatToolbarWidth ?? this.getDefaultToolbarWidth(), Math.max(window.innerWidth - 28, 260));
+  }
+
+  private getToolbarPosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth()) {
     if (!this.selection) {
       return "";
     }
 
-    const width = this.toolbarMode === "chat" ? 460 : this.getToolbarAppearance() === "rich" ? 560 : 420;
     const left = Math.min(
       Math.max(this.selection.rect.left + this.selection.rect.width / 2 - width / 2, 14),
       window.innerWidth - width - 14,
@@ -270,17 +476,43 @@ class ContentAssistant {
 
     const iconUrl = getIconUrl();
     const style = this.getToolbarPosition();
+    const appearance = this.getToolbarAppearance();
+    const toolbarClassName = ["zp-toolbar", appearance === "minimal" ? "is-minimal" : ""].filter(Boolean).join(" ");
+    const toolbarGrip = `
+      <div class="zp-toolbar-grip" aria-hidden="true">
+        <span></span>
+        <span></span>
+      </div>
+    `;
+    const actionButtons = [
+      createToolbarButton("toolbar-search", "AI搜索", getToolbarActionIcon("search"), appearance),
+      createToolbarButton("toolbar-explain", "解释", getToolbarActionIcon("explain"), appearance),
+      createToolbarButton("toolbar-read", "朗读", getToolbarActionIcon("read"), appearance),
+      createToolbarButton("toolbar-translate", "翻译", getToolbarActionIcon("translate"), appearance),
+    ].join("");
 
     if (this.toolbarMode === "chat") {
+      const canSend = Boolean(this.toolbarDraft.trim());
+      const chatWidth = this.getChatToolbarWidth();
       this.toolbarZone.innerHTML = `
-        <div class="zp-toolbar zp-chat-mode" style="${style}">
-          <button class="zp-toolbar-avatar" data-action="open-side-panel" type="button">
-            <img alt="智页浏览器 AI 助手" src="${iconUrl}" />
+        <div class="zp-chat-toolbar" style="${style} width:${chatWidth}px;">
+          ${createToolbarIconButton("toolbar-chat-close", "收起提问输入", getToolbarActionIcon("collapse"))}
+          <input
+            class="zp-chat-input"
+            data-role="chat-input"
+            placeholder="输入想问的问题"
+            spellcheck="false"
+            value="${escapeHtml(this.toolbarDraft)}"
+          />
+          <button
+            aria-label="发送提问"
+            class="zp-chat-send"
+            data-action="send-selection-chat"
+            type="button"
+            ${canSend ? "" : "disabled"}
+          >
+            ${getToolbarActionIcon("send")}
           </button>
-          <input class="zp-chat-input" data-role="chat-input" placeholder="输入想问的问题" value="${escapeHtml(
-            this.toolbarDraft,
-          )}" />
-          <button class="zp-chat-send" data-action="send-selection-chat" type="button">发送</button>
         </div>
       `;
 
@@ -296,19 +528,15 @@ class ContentAssistant {
       return;
     }
 
-    const appearance = this.getToolbarAppearance();
-    const buttonLabel = (rich: string, minimal: string) => (appearance === "rich" ? rich : minimal);
     this.toolbarZone.innerHTML = `
-      <div class="zp-toolbar ${appearance === "minimal" ? "is-minimal" : ""}" style="${style}">
+      <div class="${toolbarClassName}" style="${style}">
+        ${toolbarGrip}
         <button class="zp-toolbar-avatar" data-action="open-side-panel" type="button">
           <img alt="智页浏览器 AI 助手" src="${iconUrl}" />
         </button>
-        <button class="zp-toolbar-button" data-action="toolbar-search" type="button">${buttonLabel("AI搜索", "AI")}</button>
-        <button class="zp-toolbar-button" data-action="toolbar-explain" type="button">${buttonLabel("解释", "释")}</button>
-        <button class="zp-toolbar-button" data-action="toolbar-read" type="button">${buttonLabel("朗读", "读")}</button>
-        <button class="zp-toolbar-button" data-action="toolbar-translate" type="button">${buttonLabel("翻译", "译")}</button>
+        ${actionButtons}
         <div class="zp-toolbar-separator"></div>
-        <button class="zp-toolbar-button" data-action="toolbar-chat" type="button">${buttonLabel("问问智页", "聊")}</button>
+        ${createToolbarButton("toolbar-chat", "问问智页", getToolbarActionIcon("chat"), appearance, true)}
       </div>
     `;
   }
@@ -319,51 +547,56 @@ class ContentAssistant {
       return;
     }
 
-    this.cardZone.innerHTML = `
-      <div class="zp-card-stack">
-        ${this.cards
-          .map((card) => {
-            const languageRow =
-              card.kind === "translate"
-                ? `
-                    <div class="zp-card-lang-row">
-                      <select class="zp-card-select" disabled>
-                        <option>自动检测</option>
-                      </select>
-                      <span>→</span>
-                      <select class="zp-card-select" data-card-target="${card.id}">
-                        ${TARGET_LANGUAGES.map(
-                          (language) =>
-                            `<option value="${escapeHtml(language)}" ${
-                              card.targetLanguage === language ? "selected" : ""
-                            }>${escapeHtml(language)}</option>`,
-                        ).join("")}
-                      </select>
-                    </div>
-                  `
-                : "";
-            return `
-              <section class="zp-card">
-                <div class="zp-card-header">
-                  <strong>${card.kind === "translate" ? "翻译" : "解释"}</strong>
-                  <button class="zp-card-close" data-action="close-card" data-card-id="${card.id}" type="button">✕</button>
+    this.cardZone.innerHTML = this.cards
+      .map((card) => {
+        const languageRow =
+          card.kind === "translate"
+            ? `
+                <div class="zp-card-lang-row">
+                  <select class="zp-card-select" disabled>
+                    <option>自动检测</option>
+                  </select>
+                  <span>→</span>
+                  <select class="zp-card-select" data-card-target="${card.id}">
+                    ${TARGET_LANGUAGES.map(
+                      (language) =>
+                        `<option value="${escapeHtml(language)}" ${
+                          card.targetLanguage === language ? "selected" : ""
+                        }>${escapeHtml(language)}</option>`,
+                    ).join("")}
+                  </select>
                 </div>
-                ${languageRow}
-                <div class="zp-card-source">${multiline(truncateText(card.sourceText, 180))}</div>
-                <div class="zp-card-body">${
-                  card.status === "loading"
-                    ? "正在请求当前模型…"
-                    : card.status === "error"
-                      ? `<span style="color:#cf4f4f">${multiline(card.result)}</span>`
-                      : multiline(card.result)
-                }</div>
-                <div class="zp-card-footer">回答会优先结合当前网页内容与所选模型配置。</div>
-              </section>
-            `;
-          })
-          .join("")}
-      </div>
-    `;
+              `
+            : "";
+        return `
+          <section
+            class="zp-card"
+            data-card-id="${card.id}"
+            style="left:${card.position.x}px; top:${card.position.y}px; z-index:${card.zIndex};"
+          >
+            <div class="zp-card-drag-zone">
+              <button class="zp-card-drag-handle" data-drag-card="${card.id}" type="button" aria-label="拖动卡片"></button>
+            </div>
+            <div class="zp-card-header">
+              <strong>${card.kind === "translate" ? "翻译" : "解释"}</strong>
+              <button class="zp-card-close" data-action="close-card" data-card-id="${card.id}" type="button">✕</button>
+            </div>
+            ${languageRow}
+            <div class="zp-card-source">${multiline(truncateText(card.sourceText, 180))}</div>
+            <div class="zp-card-body">${
+              card.status === "loading"
+                ? card.result
+                  ? multiline(card.result)
+                  : "正在请求当前模型…"
+                : card.status === "error"
+                  ? `<span style="color:#cf4f4f">${multiline(card.result)}</span>`
+                  : multiline(card.result)
+            }</div>
+            <div class="zp-card-footer">回答会优先结合当前网页内容与所选模型配置。</div>
+          </section>
+        `;
+      })
+      .join("");
   }
 
   private renderToast() {
@@ -374,6 +607,7 @@ class ContentAssistant {
     this.selection = null;
     this.toolbarMode = "actions";
     this.toolbarDraft = "";
+    this.chatToolbarWidth = null;
     this.renderToolbar();
   }
 
@@ -416,35 +650,37 @@ class ContentAssistant {
     await runtimeRequest({ type: "OPEN_SIDE_PANEL" });
   }
 
-  private async requestQuickAction(kind: CardKind, cardId: string) {
+  private requestQuickAction(kind: CardKind, cardId: string) {
     const card = this.cards.find((item) => item.id === cardId);
     if (!card) {
       return;
     }
 
+    const requestId = crypto.randomUUID();
+    card.activeRequestId = requestId;
     card.status = "loading";
     card.result = "";
+    this.bringCardToFront(cardId);
     this.renderCards();
 
-    try {
-      const data = await runtimeRequest<{ text: string }>({
-        type: "QUICK_ACTION",
-        payload: {
-          mode: kind,
-          selectedText: card.sourceText,
-          targetLanguage: card.targetLanguage,
-          pageTitle: document.title,
-          pageUrl: window.location.href,
-        },
-      });
-      card.status = "done";
-      card.result = data.text;
-    } catch (error) {
+    void runtimeRequest<{ requestId: string }>({
+      type: "QUICK_ACTION",
+      payload: {
+        requestId,
+        mode: kind,
+        selectedText: card.sourceText,
+        targetLanguage: card.targetLanguage,
+        pageTitle: document.title,
+        pageUrl: window.location.href,
+      },
+    }).catch((error) => {
+      if (card.activeRequestId !== requestId) {
+        return;
+      }
       card.status = "error";
       card.result = error instanceof Error ? error.message : "请求失败";
-    }
-
-    this.renderCards();
+      this.renderCards();
+    });
   }
 
   private async addCard(kind: CardKind) {
@@ -459,24 +695,21 @@ class ContentAssistant {
       targetLanguage: this.state.settings.general.defaultTranslateTarget,
       status: "loading",
       result: "",
+      activeRequestId: null,
+      position: this.createCardPosition(),
+      zIndex: ++this.nextCardZIndex,
     };
 
     this.cards = [card, ...this.cards];
     this.renderCards();
-    await this.requestQuickAction(kind, card.id);
-  }
-
-  private extractPageText() {
-    return truncateText(document.body?.innerText || "", 12000);
+    this.requestQuickAction(kind, card.id);
   }
 
   private async summarizeCurrentPage() {
     await runtimeRequest({
       type: "PAGE_SUMMARY",
       payload: {
-        pageTitle: document.title,
         pageUrl: window.location.href,
-        pageText: this.extractPageText(),
       },
     });
     this.showToast("已把当前页面总结请求发送到侧边栏。");
@@ -519,7 +752,7 @@ class ContentAssistant {
     }
 
     card.targetLanguage = target.value;
-    await this.requestQuickAction("translate", card.id);
+    this.requestQuickAction("translate", card.id);
   }
 
   private async handleShadowClick(event: Event) {
@@ -535,11 +768,20 @@ class ContentAssistant {
 
     switch (action) {
       case "open-side-panel":
+        if (this.suppressAvatarClick) {
+          this.suppressAvatarClick = false;
+          break;
+        }
         await this.openSidePanel();
         break;
 
       case "avatar-summary":
         await this.summarizeCurrentPage();
+        break;
+
+      case "dismiss-avatar":
+        this.avatarDismissed = true;
+        this.renderAvatar();
         break;
 
       case "avatar-ocr":
@@ -558,7 +800,13 @@ class ContentAssistant {
         break;
 
       case "toolbar-chat":
+        this.chatToolbarWidth = this.shadowRoot.querySelector<HTMLElement>(".zp-toolbar")?.offsetWidth ?? null;
         this.toolbarMode = "chat";
+        this.renderToolbar();
+        break;
+
+      case "toolbar-chat-close":
+        this.toolbarMode = "actions";
         this.renderToolbar();
         break;
 
@@ -578,9 +826,104 @@ class ContentAssistant {
     }
   }
 
+  private handleShadowPointerDown(event: PointerEvent) {
+    const avatarDragHandle = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-drag-avatar]");
+    if (avatarDragHandle) {
+      const startY = event.clientY;
+      const originTop = this.avatarTop;
+      let dragged = false;
+
+      const moveAvatar = (moveEvent: PointerEvent) => {
+        const deltaY = moveEvent.clientY - startY;
+        if (!dragged && Math.abs(deltaY) > 3) {
+          dragged = true;
+        }
+
+        if (!dragged) {
+          return;
+        }
+
+        this.avatarTop = this.clampAvatarTop(originTop + deltaY);
+        const avatarWrap = this.shadowRoot.querySelector<HTMLElement>(".zp-avatar-wrap");
+        if (avatarWrap) {
+          avatarWrap.style.top = `${this.avatarTop}px`;
+        }
+      };
+
+      const stopDragging = () => {
+        if (dragged) {
+          this.suppressAvatarClick = true;
+        }
+        window.removeEventListener("pointermove", moveAvatar);
+        window.removeEventListener("pointerup", stopDragging);
+        window.removeEventListener("pointercancel", stopDragging);
+      };
+
+      window.addEventListener("pointermove", moveAvatar);
+      window.addEventListener("pointerup", stopDragging);
+      window.addEventListener("pointercancel", stopDragging);
+      return;
+    }
+
+    const dragHandle = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-drag-card]");
+    if (!dragHandle) {
+      return;
+    }
+
+    const cardId = dragHandle.dataset.dragCard;
+    const card = this.cards.find((item) => item.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    event.preventDefault();
+    this.bringCardToFront(card.id);
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const originX = card.position.x;
+    const originY = card.position.y;
+
+    const moveCard = (moveEvent: PointerEvent) => {
+      const cardElement = this.shadowRoot.querySelector<HTMLElement>(`[data-card-id="${card.id}"]`);
+      const cardWidth = cardElement?.offsetWidth ?? 420;
+      const cardHeight = cardElement?.offsetHeight ?? 320;
+      const nextX = Math.min(Math.max(originX + moveEvent.clientX - startX, 16), window.innerWidth - cardWidth - 16);
+      const nextY = Math.min(Math.max(originY + moveEvent.clientY - startY, 16), window.innerHeight - cardHeight - 16);
+
+      card.position = {
+        x: nextX,
+        y: nextY,
+      };
+
+      if (cardElement) {
+        cardElement.style.left = `${nextX}px`;
+        cardElement.style.top = `${nextY}px`;
+        cardElement.style.zIndex = String(card.zIndex);
+      }
+    };
+
+    const stopDragging = () => {
+      window.removeEventListener("pointermove", moveCard);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    };
+
+    window.addEventListener("pointermove", moveCard);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+  }
+
   private async handleShadowKeydown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (target?.getAttribute("data-role") !== "chat-input") {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.toolbarMode = "actions";
+      this.renderToolbar();
       return;
     }
 
@@ -588,6 +931,31 @@ class ContentAssistant {
       event.preventDefault();
       await this.sendSelectionChat();
     }
+  }
+
+  private createCardPosition() {
+    const offset = this.cards.length * 22;
+    return {
+      x: Math.max(window.innerWidth - 432 - 24 - offset, 16),
+      y: Math.min(96 + offset, Math.max(window.innerHeight - 360, 16)),
+    };
+  }
+
+  private bringCardToFront(cardId: string) {
+    const card = this.cards.find((item) => item.id === cardId);
+    if (!card) {
+      return;
+    }
+
+    card.zIndex = ++this.nextCardZIndex;
+    const cardElement = this.shadowRoot.querySelector<HTMLElement>(`[data-card-id="${card.id}"]`);
+    if (cardElement) {
+      cardElement.style.zIndex = String(card.zIndex);
+    }
+  }
+
+  private clampAvatarTop(nextTop: number) {
+    return Math.min(Math.max(nextTop, 20), window.innerHeight - 56);
   }
 }
 

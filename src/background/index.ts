@@ -1,6 +1,6 @@
 import { NEW_CONVERSATION_TITLE } from "../shared/constants";
 import { defaultAppState } from "../shared/defaults";
-import { requestModelReply } from "../shared/model-client";
+import { requestModelReply, streamModelReply } from "../shared/model-client";
 import { getCurrentModelConfig, loadAppState, saveAppState, updateAppState } from "../shared/storage";
 import type { RuntimeRequest, RuntimeResponse } from "../shared/runtime-messages";
 import type {
@@ -8,6 +8,7 @@ import type {
   ChatRequestPayload,
   Conversation,
   ConversationMessage,
+  QuickActionStreamEventPayload,
   QuickTaskPayload,
   SelectionChatPayload,
   SummaryRequestPayload,
@@ -18,7 +19,6 @@ import {
   createConversationTitle,
   createId,
   sortConversations,
-  truncateText,
 } from "../shared/utils";
 
 const OPEN_SIDE_PANEL_COMMAND = "open-side-panel";
@@ -109,7 +109,7 @@ async function processConversationMessage(payload: ChatRequestPayload) {
   const currentModel = await getCurrentModelConfig(stateAfterQueue);
 
   if (!currentModel) {
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
+    await persistAssistantMessage(activeConversation.id, assistantMessageId, {
       content: "请先在设置页配置并启用一个模型，然后再开始对话。",
       status: "error",
       error: "未配置模型",
@@ -117,22 +117,24 @@ async function processConversationMessage(payload: ChatRequestPayload) {
     return;
   }
 
+  const streamUpdater = createConversationStreamUpdater(activeConversation.id, assistantMessageId);
+  let streamedContent = "";
+
   try {
-    const content = await requestModelReply(currentModel, toModelMessages(activeConversation.messages));
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
-      content,
-      status: "done",
+    const content = await streamModelReply(currentModel, toModelMessages(activeConversation.messages), {
+      onChunk: (_chunk, fullText) => {
+        streamedContent = fullText;
+        streamUpdater.update(fullText);
+      },
     });
+    streamedContent = content;
+    await streamUpdater.done(content);
   } catch (error) {
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
-      content: error instanceof Error ? error.message : "模型调用失败，请稍后重试。",
-      status: "error",
-      error: error instanceof Error ? error.message : "模型调用失败",
-    });
+    await streamUpdater.fail(error instanceof Error ? error.message : "模型调用失败，请稍后重试。", streamedContent);
   }
 }
 
-async function finalizeAssistantMessage(
+async function persistAssistantMessage(
   conversationId: string,
   messageId: string,
   payload: Pick<ConversationMessage, "content" | "status" | "error">,
@@ -162,47 +164,191 @@ async function finalizeAssistantMessage(
   });
 }
 
-async function handleQuickAction(payload: QuickTaskPayload) {
-  const state = await loadAppState();
-  const currentModel = await getCurrentModelConfig(state);
-  if (!currentModel) {
-    throw new Error("请先在设置页配置并启用模型。");
-  }
+function createConversationStreamUpdater(conversationId: string, messageId: string) {
+  let latestContent = "";
+  let latestStatus: ConversationMessage["status"] = "pending";
+  let latestError: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingCommit = Promise.resolve();
 
-  const prompt =
-    payload.mode === "translate"
-      ? `请把下面的内容翻译成 ${payload.targetLanguage || state.settings.general.defaultTranslateTarget}，只输出译文。\n\n原文：\n${payload.selectedText}`
-      : `请结合上下文解释下面这段内容，尽量清晰简洁。\n\n内容：\n${payload.selectedText}`;
-
-  const content = await requestModelReply(currentModel, [
-    {
-      role: "system",
-      content:
-        payload.mode === "translate"
-          ? "你是一名准确自然的翻译助手，会保留原文关键信息。"
-          : "你是一名擅长网页内容解释的助手，会基于用户提供的片段给出直接、清晰的解释。",
-    },
-    {
-      role: "user",
-      content: prompt,
-    },
-  ]);
+  const commit = async () => {
+    const snapshot = {
+      content: latestContent,
+      status: latestStatus,
+      error: latestError,
+    };
+    pendingCommit = pendingCommit.then(() => persistAssistantMessage(conversationId, messageId, snapshot));
+    await pendingCommit;
+  };
 
   return {
-    text: content,
+    update(content: string) {
+      latestContent = content;
+      if (timer !== null) {
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        void commit();
+      }, 100);
+    },
+    async done(content: string) {
+      latestContent = content;
+      latestStatus = "done";
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await commit();
+    },
+    async fail(errorMessage: string, partialContent = latestContent) {
+      latestContent = partialContent.trim() ? partialContent : errorMessage;
+      latestStatus = "error";
+      latestError = errorMessage;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await commit();
+    },
   };
+}
+
+function createQuickActionStreamEmitter(
+  sender: chrome.runtime.MessageSender,
+  requestId: string,
+  mode: QuickTaskPayload["mode"],
+) {
+  let latestContent = "";
+  let latestPhase: QuickActionStreamEventPayload["phase"] = "delta";
+  let latestError: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingSend = Promise.resolve();
+
+  const postMessage = async (payload: QuickActionStreamEventPayload) => {
+    if (!sender.tab?.id) {
+      return;
+    }
+
+    await chrome.tabs
+      .sendMessage(
+        sender.tab.id,
+        {
+          type: "QUICK_ACTION_STREAM_EVENT",
+          payload,
+        },
+        sender.frameId !== undefined ? { frameId: sender.frameId } : undefined,
+      )
+      .catch(() => undefined);
+  };
+
+  const flush = async () => {
+    const snapshot: QuickActionStreamEventPayload = {
+      requestId,
+      mode,
+      phase: latestPhase,
+      content: latestContent,
+      error: latestError,
+    };
+    pendingSend = pendingSend.then(() => postMessage(snapshot));
+    await pendingSend;
+  };
+
+  return {
+    start() {
+      void postMessage({
+        requestId,
+        mode,
+        phase: "start",
+        content: "",
+      });
+    },
+    update(content: string) {
+      latestContent = content;
+      latestPhase = "delta";
+      latestError = undefined;
+      if (timer !== null) {
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        void flush();
+      }, 80);
+    },
+    async done(content: string) {
+      latestContent = content;
+      latestPhase = "done";
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await flush();
+    },
+    async fail(errorMessage: string, partialContent = latestContent) {
+      latestContent = partialContent.trim() ? partialContent : errorMessage;
+      latestPhase = "error";
+      latestError = errorMessage;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await flush();
+    },
+  };
+}
+
+function startQuickActionStream(payload: QuickTaskPayload, sender: chrome.runtime.MessageSender) {
+  const emitter = createQuickActionStreamEmitter(sender, payload.requestId, payload.mode);
+  emitter.start();
+
+  void (async () => {
+    const state = await loadAppState();
+    const currentModel = await getCurrentModelConfig(state);
+    if (!currentModel) {
+      await emitter.fail("请先在设置页配置并启用模型。");
+      return;
+    }
+
+    const prompt =
+      payload.mode === "translate"
+        ? `请把下面的内容翻译成 ${payload.targetLanguage || state.settings.general.defaultTranslateTarget}，只输出译文。\n\n原文：\n${payload.selectedText}`
+        : `请结合上下文解释下面这段内容，尽量清晰简洁。\n\n内容：\n${payload.selectedText}`;
+
+    let streamedContent = "";
+
+    try {
+      const content = await streamModelReply(currentModel, [
+        {
+          role: "system",
+          content:
+            payload.mode === "translate"
+              ? "你是一名准确自然的翻译助手，会保留原文关键信息。"
+              : "你是一名擅长网页内容解释的助手，会基于用户提供的片段给出直接、清晰的解释。",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ], {
+        onChunk: (_chunk, fullText) => {
+          streamedContent = fullText;
+          emitter.update(fullText);
+        },
+      });
+
+      streamedContent = content;
+      await emitter.done(content);
+    } catch (error) {
+      await emitter.fail(error instanceof Error ? error.message : "模型调用失败，请稍后重试。", streamedContent);
+    }
+  })();
 }
 
 async function handleSummaryRequest(payload: SummaryRequestPayload, sender: chrome.runtime.MessageSender) {
   await openSidePanelForCurrentWindow(sender.tab?.windowId);
   await processConversationMessage({
-    titleHint: payload.pageTitle || "页面总结",
-    content: [
-      "请总结此页面的核心内容，并给出结构化摘要。",
-      `页面标题：${payload.pageTitle || "未知标题"}`,
-      `页面 URL：${payload.pageUrl}`,
-      `页面正文：${truncateText(payload.pageText, 7000)}`,
-    ].join("\n\n"),
+    titleHint: "页面总结",
+    content: `请总结此页面。\n\n页面 URL：${payload.pageUrl}`,
   });
 }
 
@@ -250,21 +396,20 @@ async function handleMessage(message: RuntimeRequest, sender: chrome.runtime.Mes
       return { ok: true };
 
     case "SEND_CHAT_MESSAGE":
-      await processConversationMessage(message.payload);
+      void processConversationMessage(message.payload);
       return { ok: true };
 
     case "PAGE_SUMMARY":
-      await handleSummaryRequest(message.payload, sender);
+      void handleSummaryRequest(message.payload, sender);
       return { ok: true };
 
     case "SELECTION_CHAT":
-      await handleSelectionChat(message.payload, sender);
+      void handleSelectionChat(message.payload, sender);
       return { ok: true };
 
-    case "QUICK_ACTION": {
-      const data = await handleQuickAction(message.payload);
-      return { ok: true, data };
-    }
+    case "QUICK_ACTION":
+      startQuickActionStream(message.payload, sender);
+      return { ok: true, data: { requestId: message.payload.requestId } };
 
     case "TEST_MODEL_CONNECTION": {
       const text = await requestModelReply(message.payload.config, [

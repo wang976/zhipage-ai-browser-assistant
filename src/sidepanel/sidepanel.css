@@ -81,6 +81,7 @@
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 100vh;
+  background: #ffffff;
 }
 
 .sp-topbar {
@@ -138,7 +139,6 @@
 
 .sp-primary-button,
 .sp-ghost-button,
-.sp-icon-button,
 .sp-send-button,
 .sp-menu-button {
   border: 0;
@@ -157,8 +157,7 @@
   padding: 10px 14px;
 }
 
-.sp-ghost-button,
-.sp-icon-button {
+.sp-ghost-button {
   padding: 10px 14px;
   color: var(--text);
   background: rgba(229, 236, 248, 0.82);
@@ -201,6 +200,7 @@
 .sp-conversation {
   overflow: auto;
   padding: 22px 18px 140px;
+  background: #ffffff;
 }
 
 .sp-message {
@@ -212,6 +212,10 @@
 
 .sp-message.is-user {
   align-items: flex-end;
+}
+
+.sp-message.is-assistant {
+  align-items: stretch;
 }
 
 .sp-message-meta {
@@ -229,13 +233,26 @@
   border: 1px solid var(--border);
   border-radius: 22px;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 12px 32px rgba(46, 67, 109, 0.08);
+  color: var(--text);
+  background: rgba(240, 242, 246, 0.96);
+  box-shadow: 0 10px 24px rgba(46, 67, 109, 0.06);
 }
 
 .sp-message.is-user .sp-message-bubble {
-  color: white;
-  background: linear-gradient(135deg, #3c74fa, #2057db);
+  background: rgba(240, 242, 246, 0.96);
+}
+
+.sp-message-content {
+  width: 100%;
+  white-space: pre-wrap;
+  line-height: 1.92;
+  font-size: 17px;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.sp-message-content.is-error {
+  color: var(--danger);
 }
 
 .sp-message-error-tag {
@@ -300,11 +317,21 @@
   position: sticky;
   bottom: 0;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   padding: 14px 18px 18px;
   border-top: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(245, 247, 251, 0.5), rgba(255, 255, 255, 0.94));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.98));
   backdrop-filter: blur(16px);
+}
+
+.sp-composer-box {
+  display: grid;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(47, 106, 247, 0.12);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 30px rgba(46, 67, 109, 0.08);
 }
 
 .sp-inline-error {
@@ -331,13 +358,19 @@
 
 .sp-textarea {
   width: 100%;
+  min-height: 28px;
+  max-height: 28px;
   resize: none;
-  border: 1px solid rgba(47, 106, 247, 0.15);
-  border-radius: 26px;
-  padding: 16px 18px;
+  border: 0;
+  border-radius: 0;
+  padding: 2px 8px;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: inset 0 1px 2px rgba(36, 48, 77, 0.06);
+  font-size: 15px;
+  line-height: 1.5;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  overflow: hidden;
 }
 
 .sp-composer-row {
@@ -348,32 +381,55 @@
 }
 
 .sp-model-select-wrap {
-  flex: 1;
+  max-width: 180px;
+  min-width: 120px;
 }
 
 .sp-model-select {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 12px 14px;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
   color: var(--text);
-  background: var(--panel-solid);
+  background: rgba(241, 244, 250, 0.98);
 }
 
 .sp-composer-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
 }
 
-.sp-send-button {
-  min-width: 92px;
-  padding: 12px 18px;
+.sp-square-button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(114, 128, 154, 0.16);
+  border-radius: 16px;
+  font-size: 22px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.95);
 }
 
-.sp-send-button:disabled {
+.sp-send-circle {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  font-size: 24px;
+  line-height: 1;
+  color: white;
+  background: linear-gradient(135deg, var(--accent), #4d8dff);
+  box-shadow: 0 10px 22px rgba(47, 106, 247, 0.24);
+}
+
+.sp-send-circle:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: 0.42;
 }
 
 .sp-footnote {

@@ -105,10 +105,24 @@ export function extractResponseText(payload: unknown): string {
     return "";
   }
 
-  const choices = (payload as { choices?: Array<{ message?: { content?: unknown } }> }).choices;
-  const content = choices?.[0]?.message?.content;
+  const choices = (payload as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> }).choices;
+  const content = choices?.[0]?.message?.content ?? choices?.[0]?.text ?? (payload as { output_text?: unknown }).output_text;
+  return extractTextPayload(content).trim();
+}
+
+export function extractStreamDelta(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const choice = (payload as { choices?: Array<{ delta?: { content?: unknown }; text?: unknown }> }).choices?.[0];
+  const content = choice?.delta?.content ?? choice?.text;
+  return extractTextPayload(content);
+}
+
+function extractTextPayload(content: unknown): string {
   if (typeof content === "string") {
-    return content.trim();
+    return content;
   }
 
   if (Array.isArray(content)) {
@@ -117,13 +131,22 @@ export function extractResponseText(payload: unknown): string {
         if (typeof item === "string") {
           return item;
         }
-        if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+        if (!item || typeof item !== "object") {
+          return "";
+        }
+        if ("text" in item && typeof item.text === "string") {
           return item.text;
+        }
+        if ("content" in item && typeof item.content === "string") {
+          return item.content;
         }
         return "";
       })
-      .join("")
-      .trim();
+      .join("");
+  }
+
+  if (content && typeof content === "object" && "text" in content && typeof content.text === "string") {
+    return content.text;
   }
 
   return "";

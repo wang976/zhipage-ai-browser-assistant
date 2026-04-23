@@ -1,6 +1,7 @@
 import type {
   ChatRequestPayload,
   ModelConfig,
+  QuickActionStreamEventPayload,
   QuickTaskPayload,
   SelectionChatPayload,
   SummaryRequestPayload,
@@ -21,3 +22,8 @@ export interface RuntimeResponse<T = unknown> {
   data?: T;
   error?: string;
 }
+
+export type RuntimePushMessage = {
+  type: "QUICK_ACTION_STREAM_EVENT";
+  payload: QuickActionStreamEventPayload;
+};

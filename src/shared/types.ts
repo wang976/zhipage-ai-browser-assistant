@@ -83,6 +83,7 @@ export interface ChatRequestPayload {
 }
 
 export interface QuickTaskPayload {
+  requestId: string;
   mode: "explain" | "translate";
   selectedText: string;
   targetLanguage?: string;
@@ -90,10 +91,16 @@ export interface QuickTaskPayload {
   pageUrl?: string;
 }
 
+export interface QuickActionStreamEventPayload {
+  requestId: string;
+  mode: QuickTaskPayload["mode"];
+  phase: "start" | "delta" | "done" | "error";
+  content: string;
+  error?: string;
+}
+
 export interface SummaryRequestPayload {
-  pageTitle: string;
   pageUrl: string;
-  pageText: string;
 }
 
 export interface SelectionChatPayload {

@@ -84,20 +84,40 @@ function extractResponseText(payload) {
     return "";
   }
   const choices = payload.choices;
-  const content = choices?.[0]?.message?.content;
+  const content = choices?.[0]?.message?.content ?? choices?.[0]?.text ?? payload.output_text;
+  return extractTextPayload(content).trim();
+}
+function extractStreamDelta(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const choice = payload.choices?.[0];
+  const content = choice?.delta?.content ?? choice?.text;
+  return extractTextPayload(content);
+}
+function extractTextPayload(content) {
   if (typeof content === "string") {
-    return content.trim();
+    return content;
   }
   if (Array.isArray(content)) {
     return content.map((item) => {
       if (typeof item === "string") {
         return item;
       }
-      if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+      if (!item || typeof item !== "object") {
+        return "";
+      }
+      if ("text" in item && typeof item.text === "string") {
         return item.text;
       }
+      if ("content" in item && typeof item.content === "string") {
+        return item.content;
+      }
       return "";
-    }).join("").trim();
+    }).join("");
+  }
+  if (content && typeof content === "object" && "text" in content && typeof content.text === "string") {
+    return content.text;
   }
   return "";
 }
@@ -145,7 +165,7 @@ var defaultAppState = {
 };
 
 // src/shared/model-client.ts
-async function requestModelReply(config, messages) {
+function validateConfig(config) {
   if (!config.enabled) {
     throw new Error("\u5F53\u524D\u6A21\u578B\u5DF2\u7981\u7528\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u9875\u542F\u7528\u540E\u518D\u8BD5\u3002");
   }
@@ -162,6 +182,10 @@ async function requestModelReply(config, messages) {
   if (!endpoint) {
     throw new Error("\u6A21\u578B API \u5730\u5740\u65E0\u6548\u3002");
   }
+  return endpoint;
+}
+async function streamModelReply(config, messages, handlers = {}) {
+  const endpoint = validateConfig(config);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6e4);
   try {
@@ -174,6 +198,7 @@ async function requestModelReply(config, messages) {
       body: JSON.stringify({
         model: config.model,
         temperature: 0.2,
+        stream: true,
         messages
       }),
       signal: controller.signal
@@ -182,12 +207,59 @@ async function requestModelReply(config, messages) {
       const detail = await response.text().catch(() => "");
       throw new Error(`\u6A21\u578B\u8BF7\u6C42\u5931\u8D25\uFF08${response.status}\uFF09\uFF1A${detail || response.statusText}`);
     }
-    const payload = await response.json();
-    const text = extractResponseText(payload);
-    if (!text) {
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.body || contentType.includes("application/json")) {
+      const payload = await response.json();
+      const text = extractResponseText(payload);
+      if (!text) {
+        throw new Error("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u89E3\u6790\u56DE\u590D\u5185\u5BB9\u3002");
+      }
+      await handlers.onChunk?.(text, text);
+      await handlers.onComplete?.(text);
+      return text;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    const flushEventBlock = async (rawEvent) => {
+      const data = rawEvent.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n").trim();
+      if (!data || data === "[DONE]") {
+        return;
+      }
+      const payload = JSON.parse(data);
+      const delta = extractStreamDelta(payload);
+      if (!delta) {
+        return;
+      }
+      fullText += delta;
+      await handlers.onChunk?.(delta, fullText);
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex !== -1) {
+        const eventBlock = buffer.slice(0, separatorIndex).trim();
+        buffer = buffer.slice(separatorIndex + 2);
+        if (eventBlock) {
+          await flushEventBlock(eventBlock);
+        }
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+    if (buffer.trim()) {
+      await flushEventBlock(buffer.trim());
+    }
+    if (!fullText.trim()) {
       throw new Error("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u89E3\u6790\u56DE\u590D\u5185\u5BB9\u3002");
     }
-    return text;
+    await handlers.onComplete?.(fullText);
+    return fullText;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
@@ -196,6 +268,15 @@ async function requestModelReply(config, messages) {
   } finally {
     clearTimeout(timeout);
   }
+}
+async function requestModelReply(config, messages) {
+  let finalText = "";
+  await streamModelReply(config, messages, {
+    onChunk: (_chunk, fullText) => {
+      finalText = fullText;
+    }
+  });
+  return finalText;
 }
 
 // src/shared/storage.ts
@@ -332,28 +413,29 @@ async function processConversationMessage(payload) {
   const activeConversation = ensureConversation(stateAfterQueue.conversations, stateAfterQueue.activeConversationId);
   const currentModel = await getCurrentModelConfig(stateAfterQueue);
   if (!currentModel) {
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
+    await persistAssistantMessage(activeConversation.id, assistantMessageId, {
       content: "\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u914D\u7F6E\u5E76\u542F\u7528\u4E00\u4E2A\u6A21\u578B\uFF0C\u7136\u540E\u518D\u5F00\u59CB\u5BF9\u8BDD\u3002",
       status: "error",
       error: "\u672A\u914D\u7F6E\u6A21\u578B"
     });
     return;
   }
+  const streamUpdater = createConversationStreamUpdater(activeConversation.id, assistantMessageId);
+  let streamedContent = "";
   try {
-    const content = await requestModelReply(currentModel, toModelMessages(activeConversation.messages));
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
-      content,
-      status: "done"
+    const content = await streamModelReply(currentModel, toModelMessages(activeConversation.messages), {
+      onChunk: (_chunk, fullText) => {
+        streamedContent = fullText;
+        streamUpdater.update(fullText);
+      }
     });
+    streamedContent = content;
+    await streamUpdater.done(content);
   } catch (error) {
-    await finalizeAssistantMessage(activeConversation.id, assistantMessageId, {
-      content: error instanceof Error ? error.message : "\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002",
-      status: "error",
-      error: error instanceof Error ? error.message : "\u6A21\u578B\u8C03\u7528\u5931\u8D25"
-    });
+    await streamUpdater.fail(error instanceof Error ? error.message : "\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002", streamedContent);
   }
 }
-async function finalizeAssistantMessage(conversationId, messageId, payload) {
+async function persistAssistantMessage(conversationId, messageId, payload) {
   await updateAppState((state) => {
     const conversation = ensureConversation(state.conversations, conversationId);
     const nextConversation = {
@@ -375,43 +457,173 @@ async function finalizeAssistantMessage(conversationId, messageId, payload) {
     };
   });
 }
-async function handleQuickAction(payload) {
-  const state = await loadAppState();
-  const currentModel = await getCurrentModelConfig(state);
-  if (!currentModel) {
-    throw new Error("\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u914D\u7F6E\u5E76\u542F\u7528\u6A21\u578B\u3002");
-  }
-  const prompt = payload.mode === "translate" ? `\u8BF7\u628A\u4E0B\u9762\u7684\u5185\u5BB9\u7FFB\u8BD1\u6210 ${payload.targetLanguage || state.settings.general.defaultTranslateTarget}\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\u3002
+function createConversationStreamUpdater(conversationId, messageId) {
+  let latestContent = "";
+  let latestStatus = "pending";
+  let latestError;
+  let timer = null;
+  let pendingCommit = Promise.resolve();
+  const commit = async () => {
+    const snapshot = {
+      content: latestContent,
+      status: latestStatus,
+      error: latestError
+    };
+    pendingCommit = pendingCommit.then(() => persistAssistantMessage(conversationId, messageId, snapshot));
+    await pendingCommit;
+  };
+  return {
+    update(content) {
+      latestContent = content;
+      if (timer !== null) {
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        void commit();
+      }, 100);
+    },
+    async done(content) {
+      latestContent = content;
+      latestStatus = "done";
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await commit();
+    },
+    async fail(errorMessage, partialContent = latestContent) {
+      latestContent = partialContent.trim() ? partialContent : errorMessage;
+      latestStatus = "error";
+      latestError = errorMessage;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await commit();
+    }
+  };
+}
+function createQuickActionStreamEmitter(sender, requestId, mode) {
+  let latestContent = "";
+  let latestPhase = "delta";
+  let latestError;
+  let timer = null;
+  let pendingSend = Promise.resolve();
+  const postMessage = async (payload) => {
+    if (!sender.tab?.id) {
+      return;
+    }
+    await chrome.tabs.sendMessage(
+      sender.tab.id,
+      {
+        type: "QUICK_ACTION_STREAM_EVENT",
+        payload
+      },
+      sender.frameId !== void 0 ? { frameId: sender.frameId } : void 0
+    ).catch(() => void 0);
+  };
+  const flush = async () => {
+    const snapshot = {
+      requestId,
+      mode,
+      phase: latestPhase,
+      content: latestContent,
+      error: latestError
+    };
+    pendingSend = pendingSend.then(() => postMessage(snapshot));
+    await pendingSend;
+  };
+  return {
+    start() {
+      void postMessage({
+        requestId,
+        mode,
+        phase: "start",
+        content: ""
+      });
+    },
+    update(content) {
+      latestContent = content;
+      latestPhase = "delta";
+      latestError = void 0;
+      if (timer !== null) {
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        void flush();
+      }, 80);
+    },
+    async done(content) {
+      latestContent = content;
+      latestPhase = "done";
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await flush();
+    },
+    async fail(errorMessage, partialContent = latestContent) {
+      latestContent = partialContent.trim() ? partialContent : errorMessage;
+      latestPhase = "error";
+      latestError = errorMessage;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await flush();
+    }
+  };
+}
+function startQuickActionStream(payload, sender) {
+  const emitter = createQuickActionStreamEmitter(sender, payload.requestId, payload.mode);
+  emitter.start();
+  void (async () => {
+    const state = await loadAppState();
+    const currentModel = await getCurrentModelConfig(state);
+    if (!currentModel) {
+      await emitter.fail("\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u914D\u7F6E\u5E76\u542F\u7528\u6A21\u578B\u3002");
+      return;
+    }
+    const prompt = payload.mode === "translate" ? `\u8BF7\u628A\u4E0B\u9762\u7684\u5185\u5BB9\u7FFB\u8BD1\u6210 ${payload.targetLanguage || state.settings.general.defaultTranslateTarget}\uFF0C\u53EA\u8F93\u51FA\u8BD1\u6587\u3002
 
 \u539F\u6587\uFF1A
 ${payload.selectedText}` : `\u8BF7\u7ED3\u5408\u4E0A\u4E0B\u6587\u89E3\u91CA\u4E0B\u9762\u8FD9\u6BB5\u5185\u5BB9\uFF0C\u5C3D\u91CF\u6E05\u6670\u7B80\u6D01\u3002
 
 \u5185\u5BB9\uFF1A
 ${payload.selectedText}`;
-  const content = await requestModelReply(currentModel, [
-    {
-      role: "system",
-      content: payload.mode === "translate" ? "\u4F60\u662F\u4E00\u540D\u51C6\u786E\u81EA\u7136\u7684\u7FFB\u8BD1\u52A9\u624B\uFF0C\u4F1A\u4FDD\u7559\u539F\u6587\u5173\u952E\u4FE1\u606F\u3002" : "\u4F60\u662F\u4E00\u540D\u64C5\u957F\u7F51\u9875\u5185\u5BB9\u89E3\u91CA\u7684\u52A9\u624B\uFF0C\u4F1A\u57FA\u4E8E\u7528\u6237\u63D0\u4F9B\u7684\u7247\u6BB5\u7ED9\u51FA\u76F4\u63A5\u3001\u6E05\u6670\u7684\u89E3\u91CA\u3002"
-    },
-    {
-      role: "user",
-      content: prompt
+    let streamedContent = "";
+    try {
+      const content = await streamModelReply(currentModel, [
+        {
+          role: "system",
+          content: payload.mode === "translate" ? "\u4F60\u662F\u4E00\u540D\u51C6\u786E\u81EA\u7136\u7684\u7FFB\u8BD1\u52A9\u624B\uFF0C\u4F1A\u4FDD\u7559\u539F\u6587\u5173\u952E\u4FE1\u606F\u3002" : "\u4F60\u662F\u4E00\u540D\u64C5\u957F\u7F51\u9875\u5185\u5BB9\u89E3\u91CA\u7684\u52A9\u624B\uFF0C\u4F1A\u57FA\u4E8E\u7528\u6237\u63D0\u4F9B\u7684\u7247\u6BB5\u7ED9\u51FA\u76F4\u63A5\u3001\u6E05\u6670\u7684\u89E3\u91CA\u3002"
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ], {
+        onChunk: (_chunk, fullText) => {
+          streamedContent = fullText;
+          emitter.update(fullText);
+        }
+      });
+      streamedContent = content;
+      await emitter.done(content);
+    } catch (error) {
+      await emitter.fail(error instanceof Error ? error.message : "\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002", streamedContent);
     }
-  ]);
-  return {
-    text: content
-  };
+  })();
 }
 async function handleSummaryRequest(payload, sender) {
   await openSidePanelForCurrentWindow(sender.tab?.windowId);
   await processConversationMessage({
-    titleHint: payload.pageTitle || "\u9875\u9762\u603B\u7ED3",
-    content: [
-      "\u8BF7\u603B\u7ED3\u6B64\u9875\u9762\u7684\u6838\u5FC3\u5185\u5BB9\uFF0C\u5E76\u7ED9\u51FA\u7ED3\u6784\u5316\u6458\u8981\u3002",
-      `\u9875\u9762\u6807\u9898\uFF1A${payload.pageTitle || "\u672A\u77E5\u6807\u9898"}`,
-      `\u9875\u9762 URL\uFF1A${payload.pageUrl}`,
-      `\u9875\u9762\u6B63\u6587\uFF1A${truncateText(payload.pageText, 7e3)}`
-    ].join("\n\n")
+    titleHint: "\u9875\u9762\u603B\u7ED3",
+    content: `\u8BF7\u603B\u7ED3\u6B64\u9875\u9762\u3002
+
+\u9875\u9762 URL\uFF1A${payload.pageUrl}`
   });
 }
 async function handleSelectionChat(payload, sender) {
@@ -454,18 +666,17 @@ async function handleMessage(message, sender) {
       }));
       return { ok: true };
     case "SEND_CHAT_MESSAGE":
-      await processConversationMessage(message.payload);
+      void processConversationMessage(message.payload);
       return { ok: true };
     case "PAGE_SUMMARY":
-      await handleSummaryRequest(message.payload, sender);
+      void handleSummaryRequest(message.payload, sender);
       return { ok: true };
     case "SELECTION_CHAT":
-      await handleSelectionChat(message.payload, sender);
+      void handleSelectionChat(message.payload, sender);
       return { ok: true };
-    case "QUICK_ACTION": {
-      const data = await handleQuickAction(message.payload);
-      return { ok: true, data };
-    }
+    case "QUICK_ACTION":
+      startQuickActionStream(message.payload, sender);
+      return { ok: true, data: { requestId: message.payload.requestId } };
     case "TEST_MODEL_CONNECTION": {
       const text = await requestModelReply(message.payload.config, [
         {

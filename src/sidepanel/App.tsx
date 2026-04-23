@@ -112,7 +112,7 @@ export function SidePanelApp() {
     }
 
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-  }, [activeConversation?.messages.length, historyOpen]);
+  }, [activeConversation?.updatedAt, activeConversation?.messages.length, historyOpen]);
 
   async function handleSendMessage() {
     if (!draft.trim() && attachments.length === 0) {
@@ -246,12 +246,13 @@ export function SidePanelApp() {
           {activeConversation?.messages.length ? (
             activeConversation.messages.map((message) => (
               <article key={message.id} className={`sp-message ${message.role === "user" ? "is-user" : "is-assistant"}`}>
-                <div className="sp-message-meta">
-                  <span>{message.role === "user" ? "你" : "智页"}</span>
-                  {message.status === "pending" ? <span>生成中…</span> : null}
-                  {message.status === "error" ? <span className="sp-message-error-tag">失败</span> : null}
-                </div>
-                <div className="sp-message-bubble">
+                {message.role === "assistant" ? (
+                  <div className="sp-message-meta">
+                    {message.status === "pending" ? <span>生成中…</span> : null}
+                    {message.status === "error" ? <span className="sp-message-error-tag">失败</span> : null}
+                  </div>
+                ) : null}
+                <div className={message.role === "assistant" ? `sp-message-content ${message.status === "error" ? "is-error" : ""}` : "sp-message-bubble"}>
                   {message.content || "正在等待模型返回内容…"}
                   {message.attachments?.length ? (
                     <div className="sp-attachment-stack">
@@ -286,58 +287,66 @@ export function SidePanelApp() {
 
         <footer className="sp-composer">
           {errorMessage ? <div className="sp-inline-error">{errorMessage}</div> : null}
-          {attachments.length ? (
-            <div className="sp-composer-attachments">
-              {attachments.map((attachment) => (
+          <div className="sp-composer-box">
+            {attachments.length ? (
+              <div className="sp-composer-attachments">
+                {attachments.map((attachment) => (
+                  <button
+                    key={attachment.id}
+                    className="sp-attachment-pill"
+                    onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                    type="button"
+                  >
+                    <span>{attachment.name}</span>
+                    <span>移除</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <textarea
+              className="sp-textarea"
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSendMessage();
+                }
+              }}
+              placeholder="发送消息、输入 @ 或 / 选择技能"
+              rows={1}
+              value={draft}
+            />
+            <div className="sp-composer-row">
+              <div className="sp-model-select-wrap">
+                <select
+                  className="sp-model-select"
+                  onChange={(event) => void handleModelChange(event.target.value)}
+                  value={currentModel?.id || ""}
+                >
+                  {!enabledModels.length ? <option value="">未配置模型</option> : null}
+                  {enabledModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.displayName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="sp-composer-actions">
+                <input hidden multiple onChange={(event) => void handleFileSelection(event)} ref={fileInputRef} type="file" />
+                <button aria-label="上传文件" className="sp-square-button" onClick={() => fileInputRef.current?.click()} type="button">
+                  📎
+                </button>
                 <button
-                  key={attachment.id}
-                  className="sp-attachment-pill"
-                  onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                  aria-label="发送"
+                  className="sp-send-circle"
+                  disabled={hasPendingMessage && !draft.trim()}
+                  onClick={() => void handleSendMessage()}
                   type="button"
                 >
-                  <span>{attachment.name}</span>
-                  <span>移除</span>
+                  ↑
                 </button>
-              ))}
-            </div>
-          ) : null}
-          <textarea
-            className="sp-textarea"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                void handleSendMessage();
-              }
-            }}
-            placeholder="发送消息，输入 @ 或 / 选择技能"
-            rows={5}
-            value={draft}
-          />
-          <div className="sp-composer-row">
-            <div className="sp-model-select-wrap">
-              <select
-                className="sp-model-select"
-                onChange={(event) => void handleModelChange(event.target.value)}
-                value={currentModel?.id || ""}
-              >
-                {!enabledModels.length ? <option value="">未配置模型</option> : null}
-                {enabledModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="sp-composer-actions">
-              <input hidden multiple onChange={(event) => void handleFileSelection(event)} ref={fileInputRef} type="file" />
-              <button className="sp-icon-button" onClick={() => fileInputRef.current?.click()} type="button">
-                上传文件
-              </button>
-              <button className="sp-send-button" disabled={hasPendingMessage && !draft.trim()} onClick={() => void handleSendMessage()} type="button">
-                发送
-              </button>
+              </div>
             </div>
           </div>
           <p className="sp-footnote">快捷键默认建议为 `Ctrl+K`。文件上传已支持基础展示，图片能力保留扩展位。</p>
