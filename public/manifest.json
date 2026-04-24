@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "智页浏览器 AI 助手",
   "description": "侧边栏、多会话、网页划词与悬浮头像的一体化 AI 助手。",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel", "tabs"],
   "host_permissions": ["<all_urls>"],

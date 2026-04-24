@@ -210,6 +210,7 @@ class ContentAssistant {
   private toastZone: HTMLDivElement;
   private selection: SelectionSnapshot | null = null;
   private toolbarMode: ToolbarMode = "actions";
+  private toolbarOffset = { x: 0, y: 0 };
   private toolbarDraft = "";
   private chatToolbarWidth: number | null = null;
   private cards: FloatingCard[] = [];
@@ -516,9 +517,9 @@ class ContentAssistant {
     return Math.min(this.chatToolbarWidth ?? this.getDefaultToolbarWidth(), Math.max(window.innerWidth - 28, 260));
   }
 
-  private getToolbarPosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth()) {
+  private getToolbarBasePosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth()) {
     if (!this.selection) {
-      return "";
+      return { left: 14, top: 16 };
     }
 
     const left = Math.min(
@@ -527,6 +528,16 @@ class ContentAssistant {
     );
     const preferredTop = this.selection.rect.top - 64;
     const top = preferredTop > 16 ? preferredTop : this.selection.rect.bottom + 12;
+    return { left, top };
+  }
+
+  private getToolbarPosition(
+    width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth(),
+    height = this.toolbarMode === "chat" ? 42 : 40,
+  ) {
+    const basePosition = this.getToolbarBasePosition(width);
+    const left = Math.min(Math.max(basePosition.left + this.toolbarOffset.x, 14), window.innerWidth - width - 14);
+    const top = Math.min(Math.max(basePosition.top + this.toolbarOffset.y, 16), window.innerHeight - height - 16);
     return `left:${left}px; top:${top}px;`;
   }
 
@@ -541,10 +552,10 @@ class ContentAssistant {
     const appearance = this.getToolbarAppearance();
     const toolbarClassName = ["zp-toolbar", appearance === "minimal" ? "is-minimal" : ""].filter(Boolean).join(" ");
     const toolbarGrip = `
-      <div class="zp-toolbar-grip" aria-hidden="true">
+      <button class="zp-toolbar-grip" data-drag-toolbar="true" type="button" aria-label="拖动工具栏">
         <span></span>
         <span></span>
-      </div>
+      </button>
     `;
     const actionButtons = [
       createToolbarButton("toolbar-search", "AI搜索", getToolbarActionIcon("search"), appearance),
@@ -668,6 +679,7 @@ class ContentAssistant {
   private hideToolbar() {
     this.selection = null;
     this.toolbarMode = "actions";
+    this.toolbarOffset = { x: 0, y: 0 };
     this.toolbarDraft = "";
     this.chatToolbarWidth = null;
     this.renderSelectionHighlight();
@@ -707,6 +719,7 @@ class ContentAssistant {
       range: range.cloneRange(),
     };
     this.toolbarMode = "actions";
+    this.toolbarOffset = { x: 0, y: 0 };
     this.toolbarDraft = "";
     this.renderSelectionHighlight();
     this.renderToolbar();
@@ -911,6 +924,50 @@ class ContentAssistant {
   }
 
   private handleShadowPointerDown(event: PointerEvent) {
+    const toolbarDragHandle = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-drag-toolbar]");
+    if (toolbarDragHandle) {
+      const toolbarElement = toolbarDragHandle.closest<HTMLElement>(".zp-toolbar");
+      if (!toolbarElement) {
+        return;
+      }
+
+      event.preventDefault();
+      this.restoreNativeSelection();
+
+      const toolbarRect = toolbarElement.getBoundingClientRect();
+      const toolbarWidth = toolbarElement.offsetWidth || this.getDefaultToolbarWidth();
+      const toolbarHeight = toolbarElement.offsetHeight || 40;
+      const basePosition = this.getToolbarBasePosition(toolbarWidth);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const originLeft = toolbarRect.left;
+      const originTop = toolbarRect.top;
+
+      const moveToolbar = (moveEvent: PointerEvent) => {
+        const nextLeft = Math.min(Math.max(originLeft + moveEvent.clientX - startX, 14), window.innerWidth - toolbarWidth - 14);
+        const nextTop = Math.min(Math.max(originTop + moveEvent.clientY - startY, 16), window.innerHeight - toolbarHeight - 16);
+
+        this.toolbarOffset = {
+          x: nextLeft - basePosition.left,
+          y: nextTop - basePosition.top,
+        };
+
+        toolbarElement.style.left = `${nextLeft}px`;
+        toolbarElement.style.top = `${nextTop}px`;
+      };
+
+      const stopDragging = () => {
+        window.removeEventListener("pointermove", moveToolbar);
+        window.removeEventListener("pointerup", stopDragging);
+        window.removeEventListener("pointercancel", stopDragging);
+      };
+
+      window.addEventListener("pointermove", moveToolbar);
+      window.addEventListener("pointerup", stopDragging);
+      window.addEventListener("pointercancel", stopDragging);
+      return;
+    }
+
     const avatarDragHandle = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-drag-avatar]");
     if (avatarDragHandle) {
       const startY = event.clientY;

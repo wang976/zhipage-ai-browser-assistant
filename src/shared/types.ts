@@ -1,6 +1,7 @@
 export type MessageRole = "user" | "assistant" | "system";
 export type MessageStatus = "done" | "pending" | "error";
-export type ProviderName = "chatgpt" | "kimi" | "deepseek" | "qwen" | "doubao";
+export type ProviderName = "chatgpt" | "kimi" | "deepseek" | "qwen" | "doubao" | "openrouter" | "custom";
+export type BuiltInProviderName = Exclude<ProviderName, "custom">;
 export type ToolbarAppearance = "rich" | "minimal";
 
 export interface Attachment {

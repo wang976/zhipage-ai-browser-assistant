@@ -4,26 +4,34 @@ var STORAGE_META_KEY = `${STORAGE_KEY}:meta`;
 var STORAGE_CONVERSATION_PREFIX = `${STORAGE_KEY}:conversation:`;
 var NEW_CONVERSATION_TITLE = "\u65B0\u4F1A\u8BDD";
 var DEFAULT_TRANSLATE_TARGET = "\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09";
+var BUILTIN_PROVIDER_NAMES = ["chatgpt", "kimi", "deepseek", "qwen", "doubao", "openrouter"];
+var MODEL_PROVIDER_OPTIONS = [...BUILTIN_PROVIDER_NAMES, "custom"];
 var PROVIDER_LABELS = {
   chatgpt: "ChatGPT",
   kimi: "Kimi",
   deepseek: "DeepSeek",
   qwen: "Qwen",
-  doubao: "Doubao"
+  doubao: "Doubao",
+  openrouter: "OpenRouter",
+  custom: "\u81EA\u5B9A\u4E49"
 };
 var PROVIDER_URL_HINTS = {
   chatgpt: "https://api.openai.com/v1",
   kimi: "https://api.moonshot.cn/v1",
   deepseek: "https://api.deepseek.com/v1",
   qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  doubao: "https://ark.cn-beijing.volces.com/api/v3"
+  doubao: "https://ark.cn-beijing.volces.com/api/v3",
+  openrouter: "https://openrouter.ai/api/v1",
+  custom: ""
 };
 var PROVIDER_MODEL_HINTS = {
   chatgpt: "gpt-4.1-mini",
   kimi: "moonshot-v1-8k",
   deepseek: "deepseek-chat",
   qwen: "qwen-plus",
-  doubao: "doubao-seed-1-6-flash-250615"
+  doubao: "doubao-seed-1-6-flash-250615",
+  openrouter: "openai/gpt-4",
+  custom: ""
 };
 
 // src/shared/utils.ts
@@ -140,13 +148,7 @@ var initialConversation = createConversation();
 var defaultAppState = {
   conversations: [initialConversation],
   activeConversationId: initialConversation.id,
-  models: [
-    createModelTemplate("chatgpt"),
-    createModelTemplate("kimi"),
-    createModelTemplate("deepseek"),
-    createModelTemplate("qwen"),
-    createModelTemplate("doubao")
-  ],
+  models: BUILTIN_PROVIDER_NAMES.map((providerName) => createModelTemplate(providerName)),
   currentModelId: null,
   settings: {
     general: {

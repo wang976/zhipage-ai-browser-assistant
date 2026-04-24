@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  MODEL_PROVIDER_OPTIONS,
   PROVIDER_LABELS,
   PROVIDER_MODEL_HINTS,
   PROVIDER_URL_HINTS,
@@ -32,6 +33,20 @@ function createModelDraft(providerName: ProviderName = "chatgpt"): ModelConfig {
     apiKey: "",
     model: PROVIDER_MODEL_HINTS[providerName],
     enabled: false,
+  };
+}
+
+function applyProviderPreset(current: ModelConfig, providerName: ProviderName): ModelConfig {
+  const shouldRefreshDisplayName = !current.displayName.trim() || current.displayName === PROVIDER_LABELS[current.providerName];
+  const shouldRefreshBaseUrl = !current.baseUrl.trim() || current.baseUrl === PROVIDER_URL_HINTS[current.providerName];
+  const shouldRefreshModel = !current.model.trim() || current.model === PROVIDER_MODEL_HINTS[current.providerName];
+
+  return {
+    ...current,
+    providerName,
+    displayName: shouldRefreshDisplayName ? PROVIDER_LABELS[providerName] : current.displayName,
+    baseUrl: shouldRefreshBaseUrl ? PROVIDER_URL_HINTS[providerName] : current.baseUrl,
+    model: shouldRefreshModel ? PROVIDER_MODEL_HINTS[providerName] : current.model,
   };
 }
 
@@ -365,9 +380,12 @@ export function OptionsApp() {
             <div className="op-model-list">
               {state.models.map((model) => (
                 <article key={model.id} className={`op-model-card ${state.currentModelId === model.id ? "is-default" : ""}`}>
-                  <div>
+                  <div className="op-model-meta">
                     <h3>{model.displayName}</h3>
-                    <p>
+                    <p
+                      className="op-model-caption"
+                      title={`${PROVIDER_LABELS[model.providerName]} · ${model.model || "未填写模型名"}`}
+                    >
                       {PROVIDER_LABELS[model.providerName]} · {model.model || "未填写模型名"}
                     </p>
                   </div>
@@ -406,19 +424,13 @@ export function OptionsApp() {
                 <select
                   onChange={(event) => {
                     const providerName = event.target.value as ProviderName;
-                    setDraftModel((current) => ({
-                      ...current,
-                      providerName,
-                      displayName: current.displayName || PROVIDER_LABELS[providerName],
-                      baseUrl: PROVIDER_URL_HINTS[providerName],
-                      model: current.model || PROVIDER_MODEL_HINTS[providerName],
-                    }));
+                    setDraftModel((current) => applyProviderPreset(current, providerName));
                   }}
                   value={draftModel.providerName}
                 >
-                  {Object.entries(PROVIDER_LABELS).map(([providerName, label]) => (
+                  {MODEL_PROVIDER_OPTIONS.map((providerName) => (
                     <option key={providerName} value={providerName}>
-                      {label}
+                      {PROVIDER_LABELS[providerName]}
                     </option>
                   ))}
                 </select>

@@ -241,6 +241,7 @@ export const contentStyles = `
   }
 
   .zp-toolbar-button,
+  .zp-toolbar-grip,
   .zp-toolbar-avatar,
   .zp-toolbar-control,
   .zp-chat-toolbar,
@@ -252,6 +253,7 @@ export const contentStyles = `
   }
 
   .zp-toolbar,
+  .zp-toolbar-grip,
   .zp-toolbar-avatar,
   .zp-toolbar-button,
   .zp-toolbar-control,
@@ -263,9 +265,13 @@ export const contentStyles = `
   .zp-toolbar-grip {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 3px;
     flex: 0 0 auto;
+    border-radius: 10px;
     padding: 0 3px 0 1px;
+    background: transparent;
+    cursor: grab;
   }
 
   .zp-toolbar-grip span {
@@ -273,6 +279,10 @@ export const contentStyles = `
     height: 16px;
     border-radius: 999px;
     background: rgba(114, 128, 154, 0.52);
+  }
+
+  .zp-toolbar-grip:active {
+    cursor: grabbing;
   }
 
   .zp-toolbar-avatar {

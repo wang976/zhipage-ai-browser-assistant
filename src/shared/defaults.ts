@@ -1,13 +1,14 @@
 import {
+  BUILTIN_PROVIDER_NAMES,
   DEFAULT_TRANSLATE_TARGET,
   PROVIDER_LABELS,
   PROVIDER_MODEL_HINTS,
   PROVIDER_URL_HINTS,
 } from "./constants";
-import type { AppState, ModelConfig, ProviderName } from "./types";
+import type { AppState, BuiltInProviderName, ModelConfig } from "./types";
 import { createConversation } from "./utils";
 
-function createModelTemplate(providerName: ProviderName): ModelConfig {
+function createModelTemplate(providerName: BuiltInProviderName): ModelConfig {
   return {
     id: `provider-${providerName}`,
     providerName,
@@ -24,13 +25,7 @@ const initialConversation = createConversation();
 export const defaultAppState: AppState = {
   conversations: [initialConversation],
   activeConversationId: initialConversation.id,
-  models: [
-    createModelTemplate("chatgpt"),
-    createModelTemplate("kimi"),
-    createModelTemplate("deepseek"),
-    createModelTemplate("qwen"),
-    createModelTemplate("doubao"),
-  ],
+  models: BUILTIN_PROVIDER_NAMES.map((providerName) => createModelTemplate(providerName)),
   currentModelId: null,
   settings: {
     general: {

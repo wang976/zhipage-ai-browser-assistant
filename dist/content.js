@@ -14119,26 +14119,34 @@
     "Fran\xE7ais",
     "Deutsch"
   ];
+  var BUILTIN_PROVIDER_NAMES = ["chatgpt", "kimi", "deepseek", "qwen", "doubao", "openrouter"];
+  var MODEL_PROVIDER_OPTIONS = [...BUILTIN_PROVIDER_NAMES, "custom"];
   var PROVIDER_LABELS = {
     chatgpt: "ChatGPT",
     kimi: "Kimi",
     deepseek: "DeepSeek",
     qwen: "Qwen",
-    doubao: "Doubao"
+    doubao: "Doubao",
+    openrouter: "OpenRouter",
+    custom: "\u81EA\u5B9A\u4E49"
   };
   var PROVIDER_URL_HINTS = {
     chatgpt: "https://api.openai.com/v1",
     kimi: "https://api.moonshot.cn/v1",
     deepseek: "https://api.deepseek.com/v1",
     qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    doubao: "https://ark.cn-beijing.volces.com/api/v3"
+    doubao: "https://ark.cn-beijing.volces.com/api/v3",
+    openrouter: "https://openrouter.ai/api/v1",
+    custom: ""
   };
   var PROVIDER_MODEL_HINTS = {
     chatgpt: "gpt-4.1-mini",
     kimi: "moonshot-v1-8k",
     deepseek: "deepseek-chat",
     qwen: "qwen-plus",
-    doubao: "doubao-seed-1-6-flash-250615"
+    doubao: "doubao-seed-1-6-flash-250615",
+    openrouter: "openai/gpt-4",
+    custom: ""
   };
 
   // node_modules/dompurify/dist/purify.es.mjs
@@ -16594,13 +16602,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
   var defaultAppState = {
     conversations: [initialConversation],
     activeConversationId: initialConversation.id,
-    models: [
-      createModelTemplate("chatgpt"),
-      createModelTemplate("kimi"),
-      createModelTemplate("deepseek"),
-      createModelTemplate("qwen"),
-      createModelTemplate("doubao")
-    ],
+    models: BUILTIN_PROVIDER_NAMES.map((providerName) => createModelTemplate(providerName)),
     currentModelId: null,
     settings: {
       general: {
@@ -17042,6 +17044,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
   }
 
   .zp-toolbar-button,
+  .zp-toolbar-grip,
   .zp-toolbar-avatar,
   .zp-toolbar-control,
   .zp-chat-toolbar,
@@ -17053,6 +17056,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
   }
 
   .zp-toolbar,
+  .zp-toolbar-grip,
   .zp-toolbar-avatar,
   .zp-toolbar-button,
   .zp-toolbar-control,
@@ -17064,9 +17068,13 @@ Please report this to https://github.com/markedjs/marked.`, e) {
   .zp-toolbar-grip {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 3px;
     flex: 0 0 auto;
+    border-radius: 10px;
     padding: 0 3px 0 1px;
+    background: transparent;
+    cursor: grab;
   }
 
   .zp-toolbar-grip span {
@@ -17074,6 +17082,10 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     height: 16px;
     border-radius: 999px;
     background: rgba(114, 128, 154, 0.52);
+  }
+
+  .zp-toolbar-grip:active {
+    cursor: grabbing;
   }
 
   .zp-toolbar-avatar {
@@ -17700,6 +17712,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     toastZone;
     selection = null;
     toolbarMode = "actions";
+    toolbarOffset = { x: 0, y: 0 };
     toolbarDraft = "";
     chatToolbarWidth = null;
     cards = [];
@@ -17969,9 +17982,9 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     getChatToolbarWidth() {
       return Math.min(this.chatToolbarWidth ?? this.getDefaultToolbarWidth(), Math.max(window.innerWidth - 28, 260));
     }
-    getToolbarPosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth()) {
+    getToolbarBasePosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth()) {
       if (!this.selection) {
-        return "";
+        return { left: 14, top: 16 };
       }
       const left = Math.min(
         Math.max(this.selection.rect.left + this.selection.rect.width / 2 - width / 2, 14),
@@ -17979,6 +17992,12 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       );
       const preferredTop = this.selection.rect.top - 64;
       const top = preferredTop > 16 ? preferredTop : this.selection.rect.bottom + 12;
+      return { left, top };
+    }
+    getToolbarPosition(width = this.toolbarMode === "chat" ? this.getChatToolbarWidth() : this.getDefaultToolbarWidth(), height = this.toolbarMode === "chat" ? 42 : 40) {
+      const basePosition = this.getToolbarBasePosition(width);
+      const left = Math.min(Math.max(basePosition.left + this.toolbarOffset.x, 14), window.innerWidth - width - 14);
+      const top = Math.min(Math.max(basePosition.top + this.toolbarOffset.y, 16), window.innerHeight - height - 16);
       return `left:${left}px; top:${top}px;`;
     }
     renderToolbar() {
@@ -17991,10 +18010,10 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       const appearance = this.getToolbarAppearance();
       const toolbarClassName = ["zp-toolbar", appearance === "minimal" ? "is-minimal" : ""].filter(Boolean).join(" ");
       const toolbarGrip = `
-      <div class="zp-toolbar-grip" aria-hidden="true">
+      <button class="zp-toolbar-grip" data-drag-toolbar="true" type="button" aria-label="\u62D6\u52A8\u5DE5\u5177\u680F">
         <span></span>
         <span></span>
-      </div>
+      </button>
     `;
       const actionButtons = [
         createToolbarButton("toolbar-search", "AI\u641C\u7D22", getToolbarActionIcon("search"), appearance),
@@ -18096,6 +18115,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     hideToolbar() {
       this.selection = null;
       this.toolbarMode = "actions";
+      this.toolbarOffset = { x: 0, y: 0 };
       this.toolbarDraft = "";
       this.chatToolbarWidth = null;
       this.renderSelectionHighlight();
@@ -18129,6 +18149,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         range: range.cloneRange()
       };
       this.toolbarMode = "actions";
+      this.toolbarOffset = { x: 0, y: 0 };
       this.toolbarDraft = "";
       this.renderSelectionHighlight();
       this.renderToolbar();
@@ -18301,6 +18322,42 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       }
     }
     handleShadowPointerDown(event) {
+      const toolbarDragHandle = event.target?.closest("[data-drag-toolbar]");
+      if (toolbarDragHandle) {
+        const toolbarElement = toolbarDragHandle.closest(".zp-toolbar");
+        if (!toolbarElement) {
+          return;
+        }
+        event.preventDefault();
+        this.restoreNativeSelection();
+        const toolbarRect = toolbarElement.getBoundingClientRect();
+        const toolbarWidth = toolbarElement.offsetWidth || this.getDefaultToolbarWidth();
+        const toolbarHeight = toolbarElement.offsetHeight || 40;
+        const basePosition = this.getToolbarBasePosition(toolbarWidth);
+        const startX2 = event.clientX;
+        const startY2 = event.clientY;
+        const originLeft = toolbarRect.left;
+        const originTop = toolbarRect.top;
+        const moveToolbar = (moveEvent) => {
+          const nextLeft = Math.min(Math.max(originLeft + moveEvent.clientX - startX2, 14), window.innerWidth - toolbarWidth - 14);
+          const nextTop = Math.min(Math.max(originTop + moveEvent.clientY - startY2, 16), window.innerHeight - toolbarHeight - 16);
+          this.toolbarOffset = {
+            x: nextLeft - basePosition.left,
+            y: nextTop - basePosition.top
+          };
+          toolbarElement.style.left = `${nextLeft}px`;
+          toolbarElement.style.top = `${nextTop}px`;
+        };
+        const stopDragging2 = () => {
+          window.removeEventListener("pointermove", moveToolbar);
+          window.removeEventListener("pointerup", stopDragging2);
+          window.removeEventListener("pointercancel", stopDragging2);
+        };
+        window.addEventListener("pointermove", moveToolbar);
+        window.addEventListener("pointerup", stopDragging2);
+        window.addEventListener("pointercancel", stopDragging2);
+        return;
+      }
       const avatarDragHandle = event.target?.closest("[data-drag-avatar]");
       if (avatarDragHandle) {
         const startY2 = event.clientY;

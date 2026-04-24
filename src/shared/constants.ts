@@ -1,4 +1,4 @@
-import type { ProviderName } from "./types";
+import type { BuiltInProviderName, ProviderName } from "./types";
 
 export const STORAGE_KEY = "zhipage-assistant-state";
 export const STORAGE_META_KEY = `${STORAGE_KEY}:meta`;
@@ -15,12 +15,18 @@ export const TARGET_LANGUAGES = [
   "Deutsch",
 ];
 
+export const BUILTIN_PROVIDER_NAMES: BuiltInProviderName[] = ["chatgpt", "kimi", "deepseek", "qwen", "doubao", "openrouter"];
+
+export const MODEL_PROVIDER_OPTIONS: ProviderName[] = [...BUILTIN_PROVIDER_NAMES, "custom"];
+
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
   chatgpt: "ChatGPT",
   kimi: "Kimi",
   deepseek: "DeepSeek",
   qwen: "Qwen",
   doubao: "Doubao",
+  openrouter: "OpenRouter",
+  custom: "自定义",
 };
 
 export const PROVIDER_URL_HINTS: Record<ProviderName, string> = {
@@ -29,6 +35,8 @@ export const PROVIDER_URL_HINTS: Record<ProviderName, string> = {
   deepseek: "https://api.deepseek.com/v1",
   qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
   doubao: "https://ark.cn-beijing.volces.com/api/v3",
+  openrouter: "https://openrouter.ai/api/v1",
+  custom: "",
 };
 
 export const PROVIDER_MODEL_HINTS: Record<ProviderName, string> = {
@@ -37,4 +45,6 @@ export const PROVIDER_MODEL_HINTS: Record<ProviderName, string> = {
   deepseek: "deepseek-chat",
   qwen: "qwen-plus",
   doubao: "doubao-seed-1-6-flash-250615",
+  openrouter: "openai/gpt-4",
+  custom: "",
 };
